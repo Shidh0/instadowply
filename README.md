@@ -2,7 +2,7 @@
 An app to download and watch instagram reels offline
 
 # INSTALL
-Install the player from [Releases](https://github.com/Gamingarc/com.shi.instadowply/releases/tag/v1.0)
+Install the player from [Releases]()
 
 Termux needed to run backend script
 Download from
@@ -16,9 +16,9 @@ pkg install nodejs python x14-repo tur-repo build-essential binutils pango cairo
 termux-setup-storage
 mkdir insta-bulk-grabber
 cd insta-bulk-grabber
-curl -o android_grabber.js https://raw.githubusercontent.com/Gamingarc/com.shi.instadowply/refs/heads/main/android_grabber.js
-curl -o cookies.json https://raw.githubusercontent.com/Gamingarc/com.shi.instadowply/refs/heads/main/cookies.json
-curl -o package.json https://raw.githubusercontent.com/Gamingarc/com.shi.instadowply/refs/heads/main/package.json
+curl -o android_grabber.js https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/android_grabber.js
+curl -o cookies.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/cookies.json
+curl -o package.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/package.json
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install playwright axios
 ```
 Add your Session Id to the cookies.json
@@ -48,8 +48,5 @@ exit
 ```
 Save and Exit (Ctrl+S , Ctrl +X)
 
-# YOU CAN GET YOUR INSTA ACCOUNT FLAGGED/BANNED, USE THIS AT YOUR OWN RISK
-*If your cookies get expired or flagged get a new one
-
-*Updated script for better randomised human like behaviours to evade the flag.
+# USE THIS AT YOUR OWN RISK
 *Fixed a bug in the script in which the reels tab get stuck in 10-12 count
