@@ -49,8 +49,7 @@ exit
 ```
 Save and Exit (Ctrl+S , Ctrl +X)
 
-Dont know how to add souce code of the app so i didnt lol whatever
 # USE THIS AT YOUR OWN RISK
-*Fixed a bug in the script in which the reels tab get stuck in 10-12 count
-*Improved download speed and added asynchronous downloads.
-
+# Updates
+* Fixed a bug in the script in which the reels tab get stuck in 10-12 count
+* Improved download speed and added asynchronous downloads.
