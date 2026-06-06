@@ -1,4 +1,4 @@
-// 🔥 FORCE PLAYWRIGHT TO THINK THIS IS LINUX
+// FORCE PLAYWRIGHT TO THINK THIS IS LINUX
 Object.defineProperty(process, 'platform', { value: 'linux' });
 // ============================================================================
 // SAFE PIPELINE CORES (Silently absorb background media or asset timeout drops)
