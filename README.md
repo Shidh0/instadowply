@@ -17,12 +17,13 @@ An app to download and watch instagram reels offline
 Install the player from [Releases]()
 
 Termux needed to run backend script
-Download from
-https://f-droid.org/en/packages/com.termux/
+Download from:
+
+FDroid(https://f-droid.org/en/packages/com.termux/)
 
 or
 
-https://github.com/termux/termux-app/releases
+GitHub(https://github.com/termux/termux-app/releases)
 
 ```
 pkg install nodejs python x14-repo tur-repo -y
