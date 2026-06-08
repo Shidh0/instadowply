@@ -36,7 +36,8 @@ cd insta-bulk-grabber
 curl -o android_grabber.js https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/android_grabber.js
 curl -o cookies.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/cookies.json
 curl -o package.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/package.json
-curl -o configure.sh 
+curl -o configure.sh https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/configure.sh
+chmod +x ~/insta-bulk-grabber/configure.sh
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install playwright axios
 ```
 * You can add your Session Id and download count (how many reels to download in one session) using 
