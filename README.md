@@ -1,6 +1,10 @@
 # Instadowply
 An app to download and watch instagram reels offline
 
+<img width="720" height="1535" alt="1000044063" src="https://github.com/user-attachments/assets/bc819e96-a4b9-4388-834f-ce565249247c" />
+
+<img width="720" height="1494" alt="1000044068" src="https://github.com/user-attachments/assets/a26d34cc-2b22-4a10-bcb5-c7c3ec5a601d" />
+
 # INSTALL
 Install the player from [Releases]()
 
