@@ -74,6 +74,6 @@ Save and Exit (Ctrl+S , Ctrl +X)
 # USE THIS AT YOUR OWN RISK
  * The Reels might get a little not to your liking after some time (4-7 Days) so keep opening the Insta and like/save/share/repost the stuff you like to recalibrate the algorithm.
  * Also try to use a alt/spare/burner account for this script just for safety, Don't use your main account.
-# Updates
+# Script Updates
 * Fixed a bug in the script in which the reels tab get stuck in 10-12 count
 * Improved download speed and added asynchronous downloads.
