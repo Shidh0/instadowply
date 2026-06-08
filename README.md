@@ -36,15 +36,15 @@ cd insta-bulk-grabber
 curl -o android_grabber.js https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/android_grabber.js
 curl -o cookies.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/cookies.json
 curl -o package.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/package.json
+curl -o configure.sh 
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install playwright axios
 ```
-Add your Session Id to the cookies.json
-
-You can get the Session ID from signing in to instagram in kiwi browser and using cookie editor extension or by using a pc and finding it manually.
-
+* You can add your Session Id and download count (how many reels to download in one session) using 
 ```
-nano ~/insta-bulk-grabber/cookies.json
+~/insta-bulk-grabber/configure.sh
 ```
+
+* You can get the Session ID from signing in to instagram in kiwi browser and using cookie editor extension or by using a pc and finding it manually.
 
 # Additional Setup
 ↓This is needed for the in-app button 
