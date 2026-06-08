@@ -31,7 +31,7 @@ curl -o setup_grabber.sh
 chmod +x ~/setup_grabber.sh
 ~/setup_grabber.sh
 ```
-* You can add your Session Id and download count (how many reels to download in one session)later, you can use 
+* If you want to you can add your Session Id and download count (how many reels to download in one session) later also , using
 ```
 ~/insta-bulk-grabber/configure.sh
 ```
