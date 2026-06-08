@@ -27,7 +27,7 @@ or
 
 In Termux run these commands
 ```
-curl -o setup_grabber.sh 
+curl -o setup_grabber.sh https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/setup_grabber.sh
 chmod +x ~/setup_grabber.sh
 ~/setup_grabber.sh
 ```
