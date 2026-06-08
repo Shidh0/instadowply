@@ -19,7 +19,9 @@ Install the player from [Releases]()
 Termux needed to run backend script
 Download from
 https://f-droid.org/en/packages/com.termux/
+
 or
+
 https://github.com/termux/termux-app/releases
 
 ```
