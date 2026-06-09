@@ -29,9 +29,11 @@ curl -o android_grabber.js https://raw.githubusercontent.com/Gamingarc16/instado
 curl -o cookies.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/cookies.json
 curl -o package.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/package.json
 curl -o configure.sh https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/configure.sh
+curl -o Update.sh https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/Update.sh
 
 # 5. Set appropriate permissions
 chmod +x ~/insta-bulk-grabber/configure.sh
+chmod +x ~/insta-bulk-grabber/update.sh
 
 # 6. Install Node modules with Playwright adjustments
 echo "Installing Node packages (Skipping heavy browser bundle)..."
