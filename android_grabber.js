@@ -78,7 +78,7 @@ function saveToHistory(videoId) {
 }
 
 // ============================================================================
-// LIKE SYNC ENGINE (Decodes raw long IDs and executes native finger-taps)
+// LIKE SYNC ENGINE (Decodes long IDs, kills interstitials & executes click matrix)
 // ============================================================================
 async function processPlayerLikes(page) {
     const LIKES_FILE = path.join(DOWNLOAD_FOLDER, 'pending_likes.json');
@@ -120,81 +120,134 @@ async function processPlayerLikes(page) {
 
             console.log(`  -> Automated targeting for Reel ID: ${id} (Resolved Shortcode: ${targetShortcode})`);
             try {
+                // Optimized to domcontentloaded to handle heavy network pages smoothly
                 await page.goto(`https://www.instagram.com/reels/${targetShortcode}/`, { 
                     waitUntil: 'domcontentloaded', 
-                    timeout: 20000 
+                    timeout: 30000 
                 });
                 
-                await page.waitForTimeout(4000); // Allow mobile layouts to fully settle
+                await page.waitForTimeout(5000); // Allow elements to materialize completely
+                console.log(`     [DIAGNOSTIC] Viewport directed location: ${page.url()}`);
 
-                // Safeguard: Check if already liked to prevent accidentally toggling it back off
-                const alreadyLiked = await page.$('button:has(svg[aria-label="Unlike"]), svg[aria-label="Unlike"], [aria-label="Unlike"]').catch(() => null);
-                if (alreadyLiked) {
-                    console.log(`     ℹ️ Reel is already liked. Skipping to avoid toggle-off.`);
+                // 1️⃣ INTERSTITIAL SCRUBBER: Kill full screen blocking modals or app promotion walls
+                await page.evaluate(() => {
+                    document.body.style.overflow = 'auto';
+                    document.body.style.pointerEvents = 'auto';
+                    document.documentElement.style.overflow = 'auto';
+
+                    const blockingPhrases = ['open app', 'watch in app', 'use app', 'log in', 'sign up', 'experience the best', 'not now'];
+                    const overlays = document.querySelectorAll('div, section, [role="dialog"]');
+                    
+                    overlays.forEach(el => {
+                        const style = window.getComputedStyle(el);
+                        if (style.position === 'fixed' || style.position === 'absolute') {
+                            const text = el.innerText?.toLowerCase() || '';
+                            if (blockingPhrases.some(p => text.includes(p))) {
+                                const dismissBtns = el.querySelectorAll('button, [role="button"]');
+                                dismissBtns.forEach(b => {
+                                    const bText = b.innerText?.toLowerCase() || '';
+                                    if (bText.includes('not now') || bText.includes('close') || bText.length === 0) {
+                                        b.click();
+                                    }
+                                });
+                                el.remove(); // Drop structural layout barrier entirely
+                            }
+                        }
+                    });
+                }).catch(() => {});
+
+                await page.waitForTimeout(1000);
+
+                // 2️⃣ SAFETY CHECK: Evaluate current Like alignment configuration state
+                const currentStatus = await page.evaluate(() => {
+                    const allSvgs = Array.from(document.querySelectorAll('svg'));
+                    const isUnlikedAlready = allSvgs.some(s => /unlike/i.test(s.getAttribute('aria-label') || ''));
+                    return { liked: isUnlikedAlready };
+                }).catch(() => ({ liked: false }));
+
+                if (currentStatus.liked) {
+                    console.log(`     ℹ️ Reel is already liked. Skipping entry adjustment.`);
                     continue;
                 }
 
-                let interactionSuccess = false;
+                // 3️⃣ DOM EVENT DISPATCH MATRIX: Fire trusted event tree up ancestor layers
+                const likeDispatched = await page.evaluate(() => {
+                    const allSvgs = Array.from(document.querySelectorAll('svg'));
+                    let matchIcon = allSvgs.find(svg => {
+                        const label = svg.getAttribute('aria-label') || '';
+                        return /like/i.test(label) && !/unlike/i.test(label);
+                    });
 
-                // TIER 1: Find physical Like Button & execute true Native Mobile Touch Tap
-                const heartBtn = await page.$('button:has(svg[aria-label="Like"]), svg[aria-label="Like"], [aria-label="Like"]').catch(() => null);
-                if (heartBtn) {
-                    const box = await heartBtn.boundingBox().catch(() => null);
-                    if (box) {
-                        await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
-                        console.log(`     ✅ Heart Button Native Touch-Tapped.`);
-                        interactionSuccess = true;
+                    if (!matchIcon) {
+                        matchIcon = document.querySelector('[aria-label="Like"]') || document.querySelector('[aria-label="like"]');
                     }
-                }
 
-                // TIER 2: Double-Touch Tap gesture directly on the center of the Video Viewport
-                if (!interactionSuccess) {
-                    const videoEl = await page.$('video').catch(() => null);
-                    if (videoEl) {
-                        const box = await videoEl.boundingBox().catch(() => null);
+                    if (!matchIcon) return false;
+
+                    const coreTarget = matchIcon.closest('button') || matchIcon.closest('[role="button"]') || matchIcon;
+                    coreTarget.scrollIntoView({ block: 'center' });
+
+                    const rect = coreTarget.getBoundingClientRect();
+                    const x = rect.left + rect.width / 2;
+                    const y = rect.top + rect.height / 2;
+
+                    const eventSequence = ['touchstart', 'touchend', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click'];
+                    
+                    let executionLayer = coreTarget;
+                    for (let depth = 0; depth < 3; depth++) {
+                        if (!executionLayer) break;
+                        
+                        eventSequence.forEach(evtName => {
+                            let simulatedEvt;
+                            const standardConfig = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y };
+                            
+                            if (evtName.startsWith('touch')) {
+                                const singleTouch = new Touch({ identifier: Date.now(), target: executionLayer, clientX: x, clientY: y });
+                                simulatedEvt = new TouchEvent(evtName, { bubbles: true, cancelable: true, touches: [singleTouch], targetTouches: [singleTouch], changedTouches: [singleTouch] });
+                            } else if (evtName.startsWith('pointer')) {
+                                simulatedEvt = new PointerEvent(evtName, standardConfig);
+                            } else {
+                                simulatedEvt = new MouseEvent(evtName, standardConfig);
+                            }
+                            executionLayer.dispatchEvent(simulatedEvt);
+                        });
+
+                        if (typeof executionLayer.click === 'function') {
+                            executionLayer.click();
+                        }
+                        executionLayer = executionLayer.parentElement;
+                    }
+                    return true;
+                }).catch(() => false);
+
+                if (likeDispatched) {
+                    console.log(`     ✅ Complete Event Dispatch Matrix injected into Like element layers.`);
+                } else {
+                    // Fallback Tier: True mobile layout native touchscreen coordinates click via browser driver
+                    const heartBtn = await page.$('button:has(svg[aria-label="Like"]), svg[aria-label="Like"], [aria-label="Like"]').catch(() => null);
+                    if (heartBtn) {
+                        const box = await heartBtn.boundingBox().catch(() => null);
                         if (box) {
-                            const centerX = box.x + box.width / 2;
-                            const centerY = box.y + box.height / 2;
-                            // Fast sequential screen taps to satisfy touch gesture listeners
-                            await page.touchscreen.tap(centerX, centerY);
-                            await page.waitForTimeout(80);
-                            await page.touchscreen.tap(centerX, centerY);
-                            console.log(`     ✅ Video Viewport Double-Touch Tapped.`);
-                            interactionSuccess = true;
+                            await page.touchscreen.tap(box.x + box.width / 2, box.y + box.height / 2);
+                            console.log(`     ✅ Playwright Native Touchscreen Tap Fallback deployed.`);
+                        } else {
+                            console.log(`     ❌ Error: Interaction coordinates calculation collapsed.`);
                         }
+                    } else {
+                        console.log(`     ❌ Error: Target Like structural layout elements completely absent.`);
                     }
                 }
 
-                // TIER 3: Programmatic DOM-level click dispatch fallback
-                if (!interactionSuccess) {
-                    const evalRes = await page.evaluate(() => {
-                        const btn = document.querySelector('button:has(svg[aria-label="Like"])') || 
-                                    document.querySelector('svg[aria-label="Like"]')?.closest('button') || 
-                                    document.querySelector('[aria-label="Like"]');
-                        if (btn) {
-                            btn.click();
-                            return true;
-                        }
-                        return false;
-                    }).catch(() => false);
-
-                    if (evalRes) {
-                        console.log(`     ✅ JS DOM Click Dispatched to Like Button.`);
-                        interactionSuccess = true;
-                    }
-                }
-
-                if (!interactionSuccess) {
-                    console.log(`     ❌ Error: Interaction handlers could not locate target structures.`);
-                }
-
-                await page.waitForTimeout(2000);
+                await page.waitForTimeout(4000); // Allow sufficient buffer loop to flush network socket queues
             } catch (err) {
                 console.log(`     ❌ Link unavailable or skipped: ${err.message}`);
             }
         }
 
+        // Wipe priority sync cache file completely
         fs.writeFileSync(LIKES_FILE, JSON.stringify([]), 'utf8');
+        console.log('🔄 Returning browser context back to main Reels stream feed...');
+        await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
         console.log('❤️ Priority Likes sync sequence finalized.\n');
     } catch (e) {
         console.log('⚠️ Notice processing sync pipeline:', e.message);
@@ -202,7 +255,7 @@ async function processPlayerLikes(page) {
 }
 
 // ============================================================================
-// NON-BLOCKING ASYNC DOWNLOAD WORKER (CLEAN PIPELINE WITHOUT JITTER)
+// NON-BLOCKING ASYNC DOWNLOAD WORKER
 // ============================================================================
 async function processDownloadQueue() {
     if (isDownloading || downloadQueue.length === 0 || downloadCount >= TARGET_DOWNLOAD_COUNT) {
@@ -223,6 +276,7 @@ async function processDownloadQueue() {
 
     const task = downloadQueue.shift();
     const filePath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.mp4`);
+    const captionPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.txt`); // Restored!
 
     try {
         const response = await axios({
@@ -244,6 +298,14 @@ async function processDownloadQueue() {
             writer.on('finish', () => {
                 downloadCount++;
                 saveToHistory(task.id); 
+
+                // Restored Caption Output Logic
+                if (task.caption && task.caption.trim().length > 0) {
+                    try {
+                        fs.writeFileSync(captionPath, task.caption, 'utf8');
+                    } catch (e) {}
+                }
+
                 console.log(`  -> [SAVED] Progress: ${downloadCount}/${TARGET_DOWNLOAD_COUNT} files. (Queue size: ${downloadQueue.length})`);
                 
                 if (downloadQueue.length === 0) {
@@ -277,7 +339,8 @@ function findVideoUrls(obj, foundLinks = []) {
     
     if (obj.video_versions && Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
         const id = obj.id || obj.pk || Math.random().toString(36).substring(7);
-        foundLinks.push({ url: obj.video_versions[0].url, id: id });
+        const captionText = obj.caption?.text || obj.edge_media_to_caption?.edges?.[0]?.node?.text || ''; // Restored!
+        foundLinks.push({ url: obj.video_versions[0].url, id: id, caption: captionText }); // Restored!
     }
     
     for (const key in obj) {
@@ -319,36 +382,11 @@ function findVideoUrls(obj, foundLinks = []) {
         console.log('Successfully injected authenticated session cookies.');
     } else {
         console.error('CRITICAL ERROR: cookies.json is missing!');
-        process.exit(1);
     }
 
     const page = await context.newPage();
 
-    try {
-        console.log('Navigating directly to Reels target area...');
-        await page.goto('https://www.instagram.com/reels/', {
-            waitUntil: 'networkidle',
-            timeout: 60000
-        });
-    } catch (gotoError) {
-        console.log('⚠️  Navigation warning:', gotoError.message);
-    }
-    
-    const finalUrl = page.url();
-    console.log(`Verified Browser Location: ${finalUrl}`);
-
-    if (!finalUrl.includes('/reels/')) {
-        console.error('❌ CRITICAL: Session cookies likely expired or invalid.');
-        await browser.close();
-        process.exit(1);
-    }
-
-    // 1️⃣ Run the touch-native interaction priority queue first
-    await processPlayerLikes(page);
-
-    // 2️⃣ Spin up the single instance non-blocking background downloader loop
-    processDownloadQueue();
-
+    // The listener collects video items, but the download queue won't turn on until likes clear.
     page.on('response', async (response) => {
         const url = response.url();
         const contentType = response.headers()['content-type'] || '';
@@ -370,7 +408,32 @@ function findVideoUrls(obj, foundLinks = []) {
         }
     });
 
+    try {
+        console.log('Navigating directly to Reels target area...');
+        await page.goto('https://www.instagram.com/reels/', {
+            waitUntil: 'domcontentloaded',
+            timeout: 60000
+        });
+    } catch (gotoError) {
+        console.log('⚠️  Navigation warning:', gotoError.message);
+    }
+    
+    const finalUrl = page.url();
+    console.log(`Verified Browser Location: ${finalUrl}`);
+
+    if (!finalUrl.includes('/reels/')) {
+        console.error('❌ CRITICAL: Session cookies likely expired or invalid.');
+        await browser.close();
+        process.exit(1);
+    }
+
+    // 🔒 RUN THE LIKE SEQUENCING PROCESS FIRST IN TOTAL NET ISOLATION
+    await processPlayerLikes(page);
+
     console.log('Connected to Algorithmic Feed Stream. Beginning automatic crawl loop...');
+
+    // 🚀 START THE BACKGROUND DOWNLOAD WORKER NOW THAT LIKES ARE FULLY REGISTERED
+    processDownloadQueue();
 
     let lastDownloadCount = 0;
     let stuckCounter = 0;
@@ -381,7 +444,6 @@ function findVideoUrls(obj, foundLinks = []) {
             console.log(`\n🛑 [QUEUE THRESHOLD EXCEEDED] Queue is at ${downloadQueue.length}. Pausing player view to protect feed integrity...`);
             
             try {
-                // Perform a short tap on the visual canvas to pause media playback safely
                 await page.touchscreen.tap(195, 400);
             } catch (err) {}
 
