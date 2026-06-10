@@ -181,7 +181,6 @@ async function processPlayerLikes(page) {
                     const baseX = rect.left + rect.width / 2;
                     const baseY = rect.top + rect.height / 2;
 
-                    // 🔥 FIX 1: Introduce randomized micro-jitter (-4px to +4px) so clicks aren't pixel-perfect center hits
                     const jitterX = baseX + (Math.floor(Math.random() * 9) - 4);
                     const jitterY = baseY + (Math.floor(Math.random() * 9) - 4);
 
@@ -221,7 +220,6 @@ async function processPlayerLikes(page) {
                     if (heartBtn) {
                         const box = await heartBtn.boundingBox().catch(() => null);
                         if (box) {
-                            // 🔥 FIX 1 (Fallback): Apply jitter to the native fallback tap coordinates as well
                             const nativeJitterX = (box.x + box.width / 2) + (Math.floor(Math.random() * 7) - 3);
                             const nativeJitterY = (box.y + box.height / 2) + (Math.floor(Math.random() * 7) - 3);
                             
@@ -231,8 +229,7 @@ async function processPlayerLikes(page) {
                     }
                 }
 
-                // 🔥 FIX 2: Dynamic human-like cooldown delays instead of a hardcoded 4 seconds
-                const postLikeDelay = Math.floor(Math.random() * 4000) + 3500; // Generates 3.5s to 7.5s variance
+                const postLikeDelay = Math.floor(Math.random() * 4000) + 3500; 
                 console.log(`     ⏳ Sleeping ${Math.round(postLikeDelay / 1000)}s to mask priority profile navigation behavior...`);
                 await page.waitForTimeout(postLikeDelay);
             } catch (err) {
@@ -269,41 +266,39 @@ async function processDownloadQueue() {
         console.log('⚠️ Storage write permission denied. Run: termux-setup-storage');
     }
 
-    const task = downloadQueue.shift();
-    const filePath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.mp4`);
-    const captionPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.txt`);
-
     try {
-    	
-    const task = downloadQueue.shift();
-    const filePath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.mp4`);
-    const captionPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.txt`);
-    
-    // NEW: Paths for the PFP and Username
-    const pfpPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.jpg`);
-    const userPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_user.txt`);
-
-    // 1. Save Username to text file
-    if (task.username) {
-        try { fs.writeFileSync(userPath, `@${task.username}`, 'utf8'); } catch(e){}
-    }
-
-    // 2. Download PFP Image (Buffered)
-    if (task.pfpUrl) {
-        try {
-            const pfpResponse = await axios({
-                method: 'GET',
-                url: task.pfpUrl,
-                responseType: 'arraybuffer',
-                timeout: 10000
-            });
-            fs.writeFileSync(pfpPath, pfpResponse.data);
-        } catch (e) {
-            console.log(`  -> [WARN] PFP grab failed for ${task.id}`);
+        const task = downloadQueue.shift();
+        if (!task) {
+            isDownloading = false;
+            setTimeout(processDownloadQueue, 300);
+            return;
         }
-    }
 
-    // ... Keep your existing try/catch block for the video download here ...
+        const filePath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.mp4`);
+        const captionPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.txt`);
+        const pfpPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.jpg`);
+        const userPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_user.txt`);
+
+        // 1. Save Username to text file
+        if (task.username) {
+            try { fs.writeFileSync(userPath, `@${task.username}`, 'utf8'); } catch(e){}
+        }
+
+        // 2. Download PFP Image (Buffered)
+        if (task.pfpUrl) {
+            try {
+                const pfpResponse = await axios({
+                    method: 'GET',
+                    url: task.pfpUrl,
+                    responseType: 'arraybuffer',
+                    timeout: 10000
+                });
+                fs.writeFileSync(pfpPath, pfpResponse.data);
+            } catch (e) {
+                console.log(`  -> [WARN] PFP grab failed for ${task.id}`);
+            }
+        }
+
         const response = await axios({
             method: 'GET',
             url: task.url,
@@ -363,7 +358,6 @@ function findVideoUrls(obj, foundLinks = []) {
         const id = obj.id || obj.pk || Math.random().toString(36).substring(7);
         const captionText = obj.caption?.text || obj.edge_media_to_caption?.edges?.[0]?.node?.text || '';
         
-        // Extract Username and PFP
         const username = obj.user?.username || obj.owner?.username || 'Instagram User';
         const pfpUrl = obj.user?.profile_pic_url || obj.owner?.profile_pic_url || '';
         
@@ -516,15 +510,31 @@ async function dismissLoginPopup(page) {
 
     let lastDownloadCount = 0;
     let stuckCounter = 0;
+    let lastSuccessTime = Date.now(); // 🚀 WATCHDOG TIMER INITIALIZATION
 
     while (downloadCount < TARGET_DOWNLOAD_COUNT) {
         
+        // 🚀 WATCHDOG TIMEOUT CHECK (15 Seconds Threshold)
+        if (Date.now() - lastSuccessTime > 15000) {
+            console.log('⚠️  [STUCK DETECTED] No media progress in 15s. Running soft pipeline recovery...');
+            try {
+                // Navigate back to the home reels stream to re-initialize layout without dropping context state
+                await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+                console.log('   -> Soft recovery completed. Stream baseline successfully synchronized.');
+                lastSuccessTime = Date.now(); 
+                await page.waitForTimeout(2000);
+            } catch (e) {
+                console.log('   -> Soft recovery navigation timed out, shifting layout elements manually...');
+                try { await page.evaluate(() => window.scrollTo(0, 0)); } catch(err){}
+                lastSuccessTime = Date.now(); // Postpone checking to avoid tight looping
+            }
+        }
+
         await dismissLoginPopup(page);
         
         if (downloadQueue.length > 30) {
             console.log(`\n🛑 [QUEUE BACKLOG DETECTED] Backlog size: ${downloadQueue.length}. Freezing media play states...`);
             
-            // ⏸️ Force-inject a direct media element pause into the Instagram DOM container
             await page.evaluate(() => {
                 const currentVideo = document.querySelector('video');
                 if (currentVideo && typeof currentVideo.pause === 'function') {
@@ -532,14 +542,12 @@ async function dismissLoginPopup(page) {
                 }
             }).catch(() => {});
 
-            // Hold process execution safely until your local storage handles catch up
             while (downloadQueue.length > 10) {
                 await page.waitForTimeout(1000);
             }
 
             console.log('▶️ [BACKLOG RESOLVED] Buffer safe margin reached. Resuming stream playback...\n');
             
-            // ▶️ Signal the video element to wake back up and play natively
             await page.evaluate(() => {
                 const currentVideo = document.querySelector('video');
                 if (currentVideo && typeof currentVideo.play === 'function') {
@@ -583,6 +591,7 @@ async function dismissLoginPopup(page) {
         } else {
             stuckCounter = 0;
             lastDownloadCount = downloadCount;
+            lastSuccessTime = Date.now(); // 🚀 RESET WATCHDOG ON SUCCESSFUL MEDIA CAPTURE
         }
         
         const behavioralRoll = Math.random();
