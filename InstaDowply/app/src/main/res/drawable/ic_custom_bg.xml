@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    
+    <!-- Base Layer: Screaming Neon Pink center blending into an Electric Blue corner -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="45"
+                android:type="linear"
+                android:startColor="#E1306C" 
+                android:centerColor="#FF007F"
+                android:endColor="#405DE6" />
+        </shape>
+    </item>
+    
+    <!-- Glow Overlay: Focused hot sunshine-yellow flare locked strictly to the bottom-left -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:centerX="0.0"
+                android:centerY="1.0"
+                android:gradientRadius="50dp"
+                android:startColor="#FFEB3B"
+                android:centerColor="#FF5722"
+                android:endColor="#00FF5722" />
+        </shape>
+    </item>
+    
+</layer-list>
