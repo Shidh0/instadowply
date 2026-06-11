@@ -16,6 +16,8 @@ An app to download and watch instagram reels offline
 
 
 # INSTALL
+
+   # Android
 Install the player from [Releases](https://github.com/Gamingarc16/instadowply/releases/latest)
 
 Termux needed to run backend script
