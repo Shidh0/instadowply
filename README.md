@@ -39,6 +39,12 @@ chmod +x ~/setup_grabber.sh
 ```
 ~/insta-bulk-grabber/configure.sh
 ```
+* You can get the Session ID from signing in to instagram in [Kiwi Browser](https://play.google.com/store/apps/details?id=secure.unblock.unlimited.proxy.snap.hotspot.shield) and using cookie editor extension or by using a pc and finding it manually.
+* 
+You can update the script by running 
+  ```
+  ~/insta-bulk-grabber/Update.sh
+  ```
    ## Windows
    Node js needed for the script install it from [Node js Download](https://nodejs.org/en/download)
    Then
@@ -49,13 +55,6 @@ cd insta-bulk-grabber
 curl -o windows_grabber.js https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/Windows/windows_grabber.js
 npm run setup
 ```
-* You can get the Session ID from signing in to instagram in [Kiwi Browser](https://play.google.com/store/apps/details?id=secure.unblock.unlimited.proxy.snap.hotspot.shield) and using cookie editor extension or by using a pc and finding it manually.
-
-  You can update the script by running 
-  ```
-  ~/insta-bulk-grabber/Update.sh
-  ```
-
 # USE THIS WITH CAUTION 
  * Try to use a alt/spare/burner account for this script just for safety, Don't use your main account.
  * The Reels might get a little not to your liking after some time (4-7 Days) so keep opening the Insta and like/save/share/repost the stuff you like to recalibrate the algorithm.
