@@ -47,8 +47,7 @@ You can update the script by running
   ```
    ## Windows
    Node js needed for the script install it from [Node js Download](https://nodejs.org/en/download)
-   Then
-Open cmd and paste these
+Then run terminal and paste these
 ```bash
 mkdir insta-bulk-grabber
 cd insta-bulk-grabber
