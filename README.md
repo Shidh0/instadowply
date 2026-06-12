@@ -56,6 +56,11 @@ curl -o cookies.json https://raw.githubusercontent.com/Gamingarc16/instadowply/r
 curl -o package.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/Windows/package.json
 npm run setup
 ```
+## Lunix
+ Just do same a Windows but run this also
+ ```bash
+npx playwright install chromium --with-deps
+```
 # USE THIS WITH CAUTION 
  * Try to use a alt/spare/burner account for this script just for safety, Don't use your main account.
  * The Reels might get a little not to your liking after some time (4-7 Days) so keep opening the Insta and like/save/share/repost the stuff you like to recalibrate the algorithm.
