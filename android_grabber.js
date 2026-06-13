@@ -298,8 +298,8 @@ async function executeIndividualDownload(task) {
             responseType: 'stream',
             timeout: 20000,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-                'Accept': '*/*'
+         'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+         'Accept': '*/*'
             }
         });
 
@@ -368,21 +368,28 @@ async function processDownloadQueue() {
 function findVideoUrls(obj, foundLinks = []) {
     if (!obj || typeof obj !== 'object') return foundLinks;
     
-    if (obj.video_versions && Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
-        const id = obj.id || obj.pk || Math.random().toString(36).substring(7);
-        const captionText = obj.caption?.text || obj.edge_media_to_caption?.edges?.[0]?.node?.text || '';
-        
-        const username = obj.user?.username || obj.owner?.username || 'Instagram User';
-        const pfpUrl = obj.user?.profile_pic_url || obj.owner?.profile_pic_url || '';
-        
-        foundLinks.push({ 
-            url: obj.video_versions[0].url, 
-            id: id, 
-            caption: captionText,
-            username: username,
-            pfpUrl: pfpUrl
-        });
-    }
+if (obj.video_versions && Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
+    const id = obj.id || obj.pk || Math.random().toString(36).substring(7);
+    const captionText = obj.caption?.text || obj.edge_media_to_caption?.edges?.[0]?.node?.text || '';
+    
+    const username = obj.user?.username || obj.owner?.username || 'Instagram User';
+    const pfpUrl = obj.user?.profile_pic_url || obj.owner?.profile_pic_url || '';
+    
+    // 🔥 NEW: Sort the video versions to find the highest resolution variant
+    const highestResVideo = obj.video_versions.reduce((max, video) => {
+        const currentArea = (video.width || 0) * (video.height || 0);
+        const maxArea = (max.width || 0) * (max.height || 0);
+        return currentArea > maxArea ? video : max;
+    }, obj.video_versions[0]);
+
+    foundLinks.push({ 
+        url: highestResVideo.url, // 👈 Uses the filtered high-res URL
+        id: id, 
+        caption: captionText,
+        username: username,
+        pfpUrl: pfpUrl
+    });
+}
     
     for (const key in obj) {
         if (Object.prototype.hasOwnProperty.call(obj, key)) {
@@ -545,7 +552,7 @@ async function dismissLoginPopup(page) {
 
         await dismissLoginPopup(page);
         
-        if (downloadQueue.length > 40) { // Bumped safe margin barrier to accommodate parallelized downloader throughput
+        if (downloadQueue.length > 20) { // Bumped safe margin barrier to accommodate parallelized downloader throughput
             console.log(`\n🛑 [QUEUE BACKLOG DETECTED] Backlog size: ${downloadQueue.length}. Freezing media play states...`);
             
             await page.evaluate(() => {
@@ -555,7 +562,7 @@ async function dismissLoginPopup(page) {
                 }
             }).catch(() => {});
 
-            while (downloadQueue.length > 10) {
+            while (downloadQueue.length > 6) {
                 await page.waitForTimeout(1000);
             }
 
