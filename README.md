@@ -18,7 +18,7 @@ An app to download and watch instagram reels offline
 # INSTALL
 
    ## Android
-Install the player from [Releases](https://github.com/Gamingarc16/instadowply/releases/latest)
+Install the player from [Releases](https://github.com/Shidh0/instadowply/releases/latest)
 
 Termux needed to run backend script
 Download from:
@@ -31,7 +31,7 @@ or
 
 In Termux run these commands
 ```bash
-curl -o setup_grabber.sh https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/setup_grabber.sh
+curl -o setup_grabber.sh https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/setup_grabber.sh
 chmod +x ~/setup_grabber.sh
 ~/setup_grabber.sh
 ```
@@ -51,9 +51,9 @@ Then run terminal and paste these
 ```bash
 mkdir insta-bulk-grabber
 cd insta-bulk-grabber
-curl -o windows_grabber.js https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/Windows/windows_grabber.js
-curl -o cookies.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/cookies.json
-curl -o package.json https://raw.githubusercontent.com/Gamingarc16/instadowply/refs/heads/main/Windows/package.json
+curl -o windows_grabber.js https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/Windows/windows_grabber.js
+curl -o cookies.json https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/cookies.json
+curl -o package.json https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/Windows/package.json
 npm run setup
 ```
 ## Lunix
