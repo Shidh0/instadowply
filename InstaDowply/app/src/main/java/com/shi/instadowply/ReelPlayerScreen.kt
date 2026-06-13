@@ -77,6 +77,13 @@ fun ReelPlayerScreen(
         pageCount = { videoFiles.size }
     )
     
+    // Whenever the list becomes empty (like after a purge), safely snap the pager back to 0
+LaunchedEffect(videoFiles.size) {
+    if (videoFiles.isEmpty() && pagerState.currentPage != 0) {
+        pagerState.scrollToPage(0)
+    }
+}
+    
     var showDialog by remember { mutableStateOf(false) }
 
     val sharedExoPlayer = remember {
