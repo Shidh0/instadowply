@@ -273,12 +273,10 @@ async function executeIndividualDownload(task) {
     const pfpPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.jpg`);
     const userPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_user.txt`);
 
-    // 1. Save Username to text file
     if (task.username) {
         try { fs.writeFileSync(userPath, `@${task.username}`, 'utf8'); } catch(e){}
     }
 
-    // 2. Download PFP Image (Buffered)
     if (task.pfpUrl) {
         try {
             const pfpResponse = await axios({
@@ -298,14 +296,14 @@ async function executeIndividualDownload(task) {
             responseType: 'stream',
             timeout: 20000,
             headers: {
-         'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
-         'Accept': '*/*'
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+                'Accept': '*/*'
             }
         });
 
         const writer = fs.createWriteStream(filePath);
         
-        await new Promise((resolve) => {
+        return await new Promise((resolve) => {
             response.data.pipe(writer);
 
             writer.on('finish', () => {
@@ -317,25 +315,24 @@ async function executeIndividualDownload(task) {
                         fs.writeFileSync(captionPath, task.caption, 'utf8');
                     } catch (e) {}
                 }
-
-                console.log(`  -> [SAVED] Progress: ${downloadCount}/${TARGET_DOWNLOAD_COUNT} files. (Queue size: ${downloadQueue.length})`);
-                resolve();
+                resolve(true); 
             });
 
             const handleFailure = () => {
                 writer.end();
                 try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch(e){}
-                resolve();
+                resolve(false); 
             };
 
             response.data.on('error', handleFailure);
             writer.on('error', handleFailure);
         });
-    } catch (error) {}
+    } catch (error) {
+        return false;
+    }
 }
 
 async function processDownloadQueue() {
-    // If the system reaches limit bounds or finishes queue operations
     if (downloadCount >= TARGET_DOWNLOAD_COUNT || (downloadQueue.length === 0 && activeDownloads === 0)) {
         if (downloadQueue.length === 0 && activeDownloads === 0) {
             try { if (fs.existsSync(LOCK_FILE_PATH)) fs.unlinkSync(LOCK_FILE_PATH); } catch(e){}
@@ -344,7 +341,6 @@ async function processDownloadQueue() {
         return;
     }
 
-    // Concurrently handle asynchronous operations safely decoupled from Instagram browser runtime hooks
     while (activeDownloads < MAX_CONCURRENT_DOWNLOADS && downloadQueue.length > 0 && downloadCount < TARGET_DOWNLOAD_COUNT) {
         const nextTask = downloadQueue.shift();
         if (!nextTask) break;
@@ -354,11 +350,19 @@ async function processDownloadQueue() {
             fs.writeFileSync(LOCK_FILE_PATH, 'ACTIVE', 'utf8');
         } catch (lockError) {}
 
-        // Fire and forget individual task block execution allocation
-        executeIndividualDownload(nextTask).then(() => {
+        executeIndividualDownload(nextTask).then((success) => {
             activeDownloads--;
+            if (success) {
+                console.log(` ✅ [SAVED] Progress: ${downloadCount}/${TARGET_DOWNLOAD_COUNT} files. (Queue size: ${downloadQueue.length})`);
+            } else {
+                console.log(` ♻️ [RE-QUEUE] Network drop for ${nextTask.id}. Retrying later.`);
+             setTimeout(() => {
+            downloadQueue.push(nextTask);
+             }, 1500);
+      }
         }).catch(() => {
             activeDownloads--;
+            downloadQueue.push(nextTask); 
         });
     }
 
@@ -368,28 +372,27 @@ async function processDownloadQueue() {
 function findVideoUrls(obj, foundLinks = []) {
     if (!obj || typeof obj !== 'object') return foundLinks;
     
-if (obj.video_versions && Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
-    const id = obj.id || obj.pk || Math.random().toString(36).substring(7);
-    const captionText = obj.caption?.text || obj.edge_media_to_caption?.edges?.[0]?.node?.text || '';
-    
-    const username = obj.user?.username || obj.owner?.username || 'Instagram User';
-    const pfpUrl = obj.user?.profile_pic_url || obj.owner?.profile_pic_url || '';
-    
-    // 🔥 NEW: Sort the video versions to find the highest resolution variant
-    const highestResVideo = obj.video_versions.reduce((max, video) => {
-        const currentArea = (video.width || 0) * (video.height || 0);
-        const maxArea = (max.width || 0) * (max.height || 0);
-        return currentArea > maxArea ? video : max;
-    }, obj.video_versions[0]);
+    if (obj.video_versions && Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
+        const id = obj.id || obj.pk || Math.random().toString(36).substring(7);
+        const captionText = obj.caption?.text || obj.edge_media_to_caption?.edges?.[0]?.node?.text || '';
+        
+        const username = obj.user?.username || obj.owner?.username || 'Instagram User';
+        const pfpUrl = obj.user?.profile_pic_url || obj.owner?.profile_pic_url || '';
+        
+        const highestResVideo = obj.video_versions.reduce((max, video) => {
+            const currentArea = (video.width || 0) * (video.height || 0);
+            const maxArea = (max.width || 0) * (max.height || 0);
+            return currentArea > maxArea ? video : max;
+        }, obj.video_versions[0]);
 
-    foundLinks.push({ 
-        url: highestResVideo.url, // 👈 Uses the filtered high-res URL
-        id: id, 
-        caption: captionText,
-        username: username,
-        pfpUrl: pfpUrl
-    });
-}
+        foundLinks.push({ 
+            url: highestResVideo.url, 
+            id: id, 
+            caption: captionText,
+            username: username,
+            pfpUrl: pfpUrl
+        });
+    }
     
     for (const key in obj) {
         if (Object.prototype.hasOwnProperty.call(obj, key)) {
@@ -531,12 +534,11 @@ async function dismissLoginPopup(page) {
 
     let lastDownloadCount = 0;
     let stuckCounter = 0;
-    let lastSuccessTime = Date.now(); // 🚀 WATCHDOG TIMER INITIALIZATION
+    let lastSuccessTime = Date.now(); 
 
     while (downloadCount < TARGET_DOWNLOAD_COUNT) {
         
-        // 🚀 WATCHDOG TIMEOUT CHECK (45 Seconds Threshold)
-        if (Date.now() - lastSuccessTime > 45000) {
+        if (Date.now() - lastSuccessTime > 25000) {
             console.log('⚠️  [STUCK DETECTED] No media progress in 25s. Running soft pipeline recovery...');
             try {
                 await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
@@ -552,7 +554,7 @@ async function dismissLoginPopup(page) {
 
         await dismissLoginPopup(page);
         
-        if (downloadQueue.length > 20) { // Bumped safe margin barrier to accommodate parallelized downloader throughput
+        if (downloadQueue.length > 20) { 
             console.log(`\n🛑 [QUEUE BACKLOG DETECTED] Backlog size: ${downloadQueue.length}. Freezing media play states...`);
             
             await page.evaluate(() => {
@@ -684,4 +686,5 @@ async function dismissLoginPopup(page) {
 
     console.log(`\n🎉 Success! Processed session cap of ${downloadCount} fresh items into storage.`);
     await browser.close();
+    process.exit(0);
 })();
