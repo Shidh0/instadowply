@@ -21,6 +21,8 @@ An app to download and watch instagram reels offline
 * Termux/script👇🏻
 
 <img width="532" height="354" alt="1000044072" src="https://github.com/user-attachments/assets/2a3af4c8-9e21-4dae-9d02-9c9857edebfe" />
+<img width="720" height="1294" alt="1000068287" src="https://github.com/user-attachments/assets/6cff3bf4-b148-4054-a14d-19f0e4c56580" />
+<img width="720" height="1347" alt="1000068286" src="https://github.com/user-attachments/assets/848e7fe3-587a-4124-a7a8-071169181458" />
 
 
 # INSTALL
