@@ -46,6 +46,7 @@ You can update the script by running
   ~/insta-bulk-grabber/Update.sh
   ```
    ## Windows
+  NOTE: Windows version is not actively maintained (bcus i don't have a pc lol)
    Node js needed for the script install it from [Node js Download](https://nodejs.org/en/download)
 Then run terminal and paste these
 ```bash
@@ -70,3 +71,4 @@ npx playwright install chromium --with-deps
 * Improved download speed and added asynchronous downloads.
 * Added parallel downloading to up to 3 reels at a time
 * Added a Queue backlog file that get created when you Ctrl+C to interrupt the script
+* Added some fixes to save bandwidth and increase speed.
