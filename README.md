@@ -1,7 +1,7 @@
 # Instadowply
 An app to download and watch instagram reels offline
 # Contents
-- (Overview)[# Overview]
+- [Overview](#Overview)
 - (Installation)[#Install]
   * (Android)[##Android)
   * (Windows)[##Windows]
