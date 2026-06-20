@@ -462,7 +462,7 @@ async function dismissLoginPopup(page) {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
-            '--disable-blink-features=AutomationControlled'
+            '--disable-blink-features=AutomationControlled',
         ]
     });
 
@@ -482,7 +482,7 @@ async function dismissLoginPopup(page) {
     }
     
     const page = await context.newPage();
-
+    
     page.on('response', async (response) => {
         const url = response.url();
         const contentType = response.headers()['content-type'] || '';
@@ -593,7 +593,18 @@ async function dismissLoginPopup(page) {
         } catch (swipeError) {
             try { await page.evaluate(() => window.scrollBy(0, window.innerHeight)); } catch(e){}
         }
-
+       // ⏳ Allow 1.5 seconds for the API context to trigger, then freeze the browser video player
+await page.waitForTimeout(1500);
+await page.evaluate(() => {
+    document.querySelectorAll('video').forEach(video => {
+        if (video && typeof video.pause === 'function') {
+            video.pause();
+            // Tells the browser to stop downloading data for this stream pipeline
+            video.removeAttribute('src'); 
+            video.load(); 
+        }
+    });
+}).catch(() => {});
         if (downloadCount === lastDownloadCount) {
             stuckCounter++;
             
