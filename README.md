@@ -38,7 +38,7 @@ or
 [GitHub](https://github.com/termux/termux-app/releases)
 
 In Termux run these commands
-```shell
+```bash
 curl -o setup_grabber.sh https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/setup_grabber.sh
 chmod +x ~/setup_grabber.sh
 ~/setup_grabber.sh
