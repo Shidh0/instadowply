@@ -6,8 +6,8 @@ An app to download and watch instagram reels offline
   * [Android](#Android)
   * [Windows](#Windows)
   * [Lunix](#Lunix)
-- [Warnings](#USE)
-- [Script Update Notes](#Script)
+- [Warnings](#use-with-caution)
+- [Script Update Notes](#script-updates)
 # Overview 
 * App/Player👇🏻
   
