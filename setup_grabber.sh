@@ -65,7 +65,7 @@ if [[ "$confirm_boot" =~ ^[Yy]$ ]]; then
 # --- Insta-Bulk-Grabber Automation ---
 clear
 echo "=== Engine Booted ==="
-am start -n com.shi.instadowply/com.shi.instadowply.MainActivity         
+termux-open "instadowply://open"         
 cd ~/insta-bulk-grabber
 node android_grabber.js & 
 NODE_PID=$!
