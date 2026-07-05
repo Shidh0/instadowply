@@ -63,14 +63,13 @@ if [[ "$confirm_boot" =~ ^[Yy]$ ]]; then
     cat << 'BASHRC_EOF' >> $PREFIX/etc/bash.bashrc
 
 # --- Insta-Bulk-Grabber Automation ---
-clear                                                                    
-echo "=== Engine Booted ==="         
+clear
+echo "=== Engine Booted ==="
+am start -n com.shi.instadowply/com.shi.instadowply.MainActivity         
 cd ~/insta-bulk-grabber
 node android_grabber.js & 
 NODE_PID=$!
-sleep 0.5
 echo "Snapping back to InstaDowply..."
-am start -n com.shi.instadowply/com.shi.instadowply.MainActivity
 wait $NODE_PID
 exit
 BASHRC_EOF
