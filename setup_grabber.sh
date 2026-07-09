@@ -19,9 +19,11 @@ pkg install libcairo libpango libxi libxtst libxcomposite libxdamage alsa-lib -y
 # 3. Request storage access if not already granted
 echo "Requesting storage permissions..."
 termux-setup-storage
+echo "allow-external-apps = true" >> ~/.termux/termux.properties
 
 # 4. Create directory and download necessary files
 echo "Downloading project core files..."
+curl -o sync_reels.sh https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/sync_reels.sh
 mkdir -p ~/insta-bulk-grabber
 cd ~/insta-bulk-grabber
 
@@ -35,6 +37,7 @@ curl -o Update.sh https://raw.githubusercontent.com/Shidh0/instadowply/refs/head
 # 5. Set appropriate permissions
 chmod +x ~/insta-bulk-grabber/configure.sh
 chmod +x ~/insta-bulk-grabber/Update.sh
+chmod +x ~/sync_reels.sh
 
 # 6. Install Node modules with Playwright adjustments
 echo "Installing Node packages (Skipping heavy browser bundle)..."
@@ -82,3 +85,4 @@ echo "Running initial configuration sequence..."
 echo "============================================="
 echo "        Setup Successfully Completed!        "
 echo "============================================="
+termux-reload-settings
