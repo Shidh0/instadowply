@@ -55,6 +55,7 @@ You can update the script by running
   ```bash
   ~/insta-bulk-grabber/Update.sh
   ```
+* NOTE:If you want to exit/stop downloading half way just open termux and do Ctrl+c.
    ## Windows
   NOTE: Windows version is not actively maintained (bcus i don't have a pc lol)
   
