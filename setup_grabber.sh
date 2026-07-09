@@ -42,21 +42,17 @@ PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install playwright axios
 
 # 7. Dynamic Warning Prompt before modifying bash.bashrc
 echo ""
-echo "⚠️  CRITICAL WARNING: TERMUX AUTOMATION SETUP ⚠️"
+echo " TERMUX AUTOMATION SETUP "
 echo "--------------------------------------------------------"
-echo "This step injects the startup script directly into Termux."
+echo "This step injects the log script directly into Termux."
 echo "Every single time you open Termux, it will automatically"
-echo "launch the grabber and try to snap back to the app."
+echo "launch the log viewer."
+echo "(You can Ctrl+C to exit the log viewer and exit the reel downloader.)"
 echo ""
-echo "👉 ONLY PROCEED IF:"
-echo "1. You do not plan to use Termux for anything else, OR"
-echo "2. You are comfortable pressing 'Ctrl + C' quickly every"
-echo "   time Termux opens to stop the script manually."
-echo ""
-echo "⚠️ NOTE: If you skip this part, the 'Start Script' button"
-echo "   inside the InstaDowply app WILL NOT work."
+echo " NOTE: If you skip this part, the 'Start Script' button"
+echo "   inside the InstaDowply app Won't work."
 echo "--------------------------------------------------------"
-read -p "Do you want to enable this auto-start feature? (y/n): " confirm_boot
+read -p "Do you want to enable this feature? (y/n): " confirm_boot
 
 if [[ "$confirm_boot" =~ ^[Yy]$ ]]; then
     echo "Injecting boot routine into Termux start scripts..."
@@ -64,14 +60,13 @@ if [[ "$confirm_boot" =~ ^[Yy]$ ]]; then
 
 # --- Insta-Bulk-Grabber Automation ---
 clear
-echo "=== Engine Booted ==="
-termux-open "instadowply://open"         
-cd ~/insta-bulk-grabber
-node android_grabber.js & 
-NODE_PID=$!
-echo "Snapping back to InstaDowply..."
-wait $NODE_PID
-exit
+grablog() {
+    trap "pkill -TERM -f 'node android_grabber.js'; clear" SIGINT
+    clear
+    tail -f insta-bulk-grabber/live_crawler.log
+    trap - SIGINT
+}
+grablog
 BASHRC_EOF
     echo "✅ Auto-start configuration successfully added to bash.bashrc."
 else
