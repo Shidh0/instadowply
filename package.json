@@ -1,6 +1,6 @@
 {
   "name": "insta-bulk-grabber",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Instagram Bulk Reels Grabber Script",
   "main": "android_grabber.js",
   "scripts": {
