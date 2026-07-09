@@ -49,7 +49,7 @@ chmod +x ~/setup_grabber.sh
 ```bash
 ~/insta-bulk-grabber/configure.sh
 ```
-* You can get the Session ID from signing in to instagram in Kiwi Browser Or [Mozilla Firefox](https://play.google.com/store/apps/details?id=org.mozilla.firefox)and using cookie editor extension or by using a pc and finding it manually.
+* You can get the Session ID from signing in to instagram in Kiwi Browser Or [Mozilla Firefox](https://play.google.com/store/apps/details?id=org.mozilla.firefox) and using cookie editor extension or by using a pc and finding it manually.
 * 
 You can update the script by running 
   ```bash
@@ -77,7 +77,7 @@ npx playwright install chromium --with-deps
 # USE THIS WITH CAUTION 
  * Try to use a alt/spare/burner account for this script just for safety, Don't use your main account.
  * The Reels might get a little not to your liking after some time (4-7 Days) so keep opening the Insta and like/save/share/repost the stuff you like to recalibrate the algorithm.
- * I have used this script for quite some time and downloaded around 2500+ reels without any problem as you can see in the image on top.
+ * I have used this script for quite some time and downloaded around 7500+ reels without any problem as you can see in the image on top.
 # Script Updates
 * Fixed a bug in the script in which the reels tab get stuck in 10-12 count
 * Improved download speed and added asynchronous downloads.
