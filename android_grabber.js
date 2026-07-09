@@ -47,8 +47,9 @@ const cleanupAndExit = () => {
 
 process.on('SIGINT', cleanupAndExit);
 process.on('SIGTERM', cleanupAndExit);
+process.on('SIGHUP', cleanupAndExit);
 
-const TARGET_DOWNLOAD_COUNT = 400;
+const TARGET_DOWNLOAD_COUNT = 100;
 const MAX_HISTORY_SIZE = 15000;
 const MAX_CONCURRENT_DOWNLOADS = 3; // ⚡ Parallelize IO download pipelines to maximize storage write speeds
 
