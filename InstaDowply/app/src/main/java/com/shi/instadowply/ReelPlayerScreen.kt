@@ -628,6 +628,13 @@ fun SharedPlayerItemSurface(
     var isUserDraggingProgress by remember { mutableStateOf(false) }
     var displaysHeartOverlay by remember { mutableStateOf(false) }
 
+    // Keep shouldBePlaying synced if the page changes
+    LaunchedEffect(isCurrentPage) {
+        if (!isCurrentPage) {
+            shouldBePlaying = true 
+        }
+    }
+
     LaunchedEffect(isCurrentPage, shouldBePlaying) {
         if (isCurrentPage) {
             while (true) {
@@ -658,7 +665,6 @@ fun SharedPlayerItemSurface(
                     }
                     Lifecycle.Event.ON_RESUME -> { 
                         exoPlayer.seekTo(exoPlayer.currentPosition)
-                        
                         if (shouldBePlaying) {
                             exoPlayer.play()
                         }
@@ -684,7 +690,8 @@ fun SharedPlayerItemSurface(
             update = { playerView -> playerView.player = exoPlayer },
             modifier = Modifier
                 .fillMaxSize()
-                .pointerInput(Unit) {
+                // FIX: Changed 'Unit' to 'isCurrentPage' and 'exoPlayer' keys to prevent stale lambdas
+                .pointerInput(isCurrentPage, exoPlayer) {
                     detectTapGestures(
                         onTap = {
                             if (isCurrentPage) {
