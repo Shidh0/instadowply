@@ -10,23 +10,34 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
 
-    <application
+<application
         android:icon="@mipmap/ic_launcher_custom"
         android:roundIcon="@mipmap/ic_launcher_custom"
         android:allowBackup="true"
         android:requestLegacyExternalStorage="true"
         android:label="InstaDowply"
         android:supportsRtl="true"
-        android:theme="@android:style/Theme.Material.NoActionBar">
+        android:theme="@style/Theme.InstaDowply.Launch"> 
         
         <activity
             android:name="com.shi.instadowply.MainActivity"
             android:exported="true"
-            android:theme="@android:style/Theme.Material.NoActionBar">
+            android:launchMode="singleTop"
+            android:theme="@style/Theme.InstaDowply.Launch"> 
+            
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+
+            <intent-filter android:label="Open InstaDowply">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                
+                <data android:scheme="instadowply" android:host="open" />
+            </intent-filter>
+            
         </activity>
     </application>
 
