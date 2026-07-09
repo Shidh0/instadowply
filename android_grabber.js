@@ -328,7 +328,11 @@ async function executeIndividualDownload(task) {
             response.data.on('error', handleFailure);
             writer.on('error', handleFailure);
         });
-    } catch (error) {
+} catch (error) {
+        // Check if the link is dead due to signature expiration (returns 403 or 410)
+        if (error.response && (error.response.status === 403 || error.response.status === 410)) {
+            return 'EXPIRED';
+        }
         return false;
     }
 }
@@ -351,16 +355,19 @@ async function processDownloadQueue() {
             fs.writeFileSync(LOCK_FILE_PATH, 'ACTIVE', 'utf8');
         } catch (lockError) {}
 
-        executeIndividualDownload(nextTask).then((success) => {
+        executeIndividualDownload(nextTask).then((status) => {
             activeDownloads--;
-            if (success) {
+            if (status === true) {
                 console.log(` ✅ [SAVED] Progress: ${downloadCount}/${TARGET_DOWNLOAD_COUNT} files. (Queue size: ${downloadQueue.length})`);
+            } else if (status === 'EXPIRED') {
+                console.log(` ❌ [EXPIRED] Link for Reel ${nextTask.id} has expired. Dropping from backlog permanently.`);
+                // Safely forgotten. It skips the re-queue logic entirely.
             } else {
                 console.log(` ♻️ [RE-QUEUE] Network drop for ${nextTask.id}. Retrying later.`);
-             setTimeout(() => {
-            downloadQueue.push(nextTask);
-             }, 1500);
-      }
+                setTimeout(() => {
+                    downloadQueue.push(nextTask);
+                }, 1500);
+            }
         }).catch(() => {
             activeDownloads--;
             downloadQueue.push(nextTask); 
