@@ -1,5 +1,5 @@
 # Instadowply
-An app to download and watch instagram reels offline
+An app to download and watch instagram fyp reels  offline
 # Contents
 * [Overview](#Overview)
 * [Installation](#Install)
