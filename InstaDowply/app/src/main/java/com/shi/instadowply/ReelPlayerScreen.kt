@@ -52,18 +52,17 @@ fun ReelPlayerScreen(
     videoDirectory: File,
     initialPage: Int,
     onPageChanged: (Int) -> Unit,
-    onFeedFinished: () -> Unit,
+    onFeedFinished: (() -> Unit) -> Unit,
     onLaunchTermux: () -> Unit
 ) {
     val context = LocalContext.current
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var isTermuxRunning by remember { mutableStateOf(false) }
-
-    LaunchedEffect(videoDirectory) {
+    val lockFile = remember(videoDirectory) { File(videoDirectory, "download.lock") }
+    LaunchedEffect(lockFile) {
         while (true) {
-            val lockFile = File("/storage/emulated/0/.Reels/download.lock")
             isTermuxRunning = lockFile.exists()
-            delay(2500)
+            delay(1500)
         }
     }
 
@@ -77,21 +76,20 @@ fun ReelPlayerScreen(
         pageCount = { videoFiles.size }
     )
     
-    // Whenever the list becomes empty (like after a purge), safely snap the pager back to 0
 LaunchedEffect(videoFiles.size) {
     if (videoFiles.isEmpty() && pagerState.currentPage != 0) {
         pagerState.scrollToPage(0)
     }
 }
-    
-    var showDialog by remember { mutableStateOf(false) }
-
-    val sharedExoPlayer = remember {
+val playerPool = remember(context) {
+    List(3) {
         ExoPlayer.Builder(context).build().apply {
             repeatMode = Player.REPEAT_MODE_ONE
-            playWhenReady = true
+            playWhenReady = false
         }
     }
+}
+    var showDialog by remember { mutableStateOf(false) }
 
     val currentVideoFile = videoFiles.getOrNull(pagerState.currentPage)
     val currentReelId = remember(currentVideoFile) {
@@ -100,7 +98,7 @@ LaunchedEffect(videoFiles.size) {
 
     var isCurrentVideoLiked by remember(currentReelId) { mutableStateOf(false) }
     var isCurrentVideoSaved by remember(currentVideoFile) { mutableStateOf(false) }
-    val likesJsonFile = remember { File("/storage/emulated/0/.Reels/pending_likes.json") }
+    val likesJsonFile = remember(videoDirectory) { File(videoDirectory, "pending_likes.json") }
 
     LaunchedEffect(currentReelId, currentVideoFile, refreshTrigger) {
         if (likesJsonFile.exists() && currentReelId.isNotEmpty()) {
@@ -221,24 +219,38 @@ LaunchedEffect(videoFiles.size) {
             if (destination.exists()) {
                 destination.delete()
                 isCurrentVideoSaved = false
+                
+                android.media.MediaScannerConnection.scanFile(
+                    context,
+                    arrayOf(destination.absolutePath),
+                    arrayOf("video/mp4"),
+                    null
+                )
+                
                 Toast.makeText(context, "Removed from InstaSaved", Toast.LENGTH_SHORT).show()
             } else {
                 if (fileToSave.exists()) {
                     fileToSave.copyTo(destination, overwrite = true)
                     isCurrentVideoSaved = true
                     Toast.makeText(context, "Copied to Download/InstaSaved ✨", Toast.LENGTH_SHORT).show()
+                    
+                    android.media.MediaScannerConnection.scanFile(
+                        context,
+                        arrayOf(destination.absolutePath),
+                        arrayOf("video/mp4")
+                    ) { _, _ ->
+                    }
                 }
             }
         } catch (e: Exception) {
             Toast.makeText(context, "Folder Save Error: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            sharedExoPlayer.release()
-        }
+DisposableEffect(Unit) {
+    onDispose {
+        playerPool.forEach { it.release() }
     }
+}
 
     LaunchedEffect(pagerState.currentPage) {
         if (videoFiles.isNotEmpty()) {
@@ -253,21 +265,57 @@ LaunchedEffect(videoFiles.size) {
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "No reels found inside storage folder.\nFeed data via Termux!",
+                    text = "No reels found inside storage folder.\nRun script via Termux!",
                     style = MaterialTheme.typography.bodyLarge,
                     color = Color.Gray
                 )
             }
         } else {
             LaunchedEffect(pagerState.currentPage, videoFiles, refreshTrigger) {
-                if (videoFiles.isNotEmpty() && pagerState.currentPage < videoFiles.size) {
-                    val activeFile = videoFiles[pagerState.currentPage]
-                    sharedExoPlayer.stop()
-                    sharedExoPlayer.setMediaItem(MediaItem.fromUri(activeFile.absolutePath))
-                    sharedExoPlayer.prepare()
-                    sharedExoPlayer.playWhenReady = true
-                }
+    if (videoFiles.isNotEmpty()) {
+        val currentIdx = pagerState.currentPage
+        playerPool.forEach { it.pause() }
+
+        if (currentIdx < videoFiles.size) {
+            val currentPlayer = playerPool[currentIdx % 3]
+            val activeFile = videoFiles[currentIdx]
+            
+            if (currentPlayer.currentMediaItem?.localConfiguration?.uri?.path != activeFile.absolutePath) {
+                currentPlayer.setMediaItem(MediaItem.fromUri(activeFile.absolutePath))
+                currentPlayer.prepare()
             }
+            currentPlayer.playWhenReady = true
+        }
+
+        val nextIdx = currentIdx + 1
+        if (nextIdx < videoFiles.size) {
+            val nextPlayer = playerPool[nextIdx % 3]
+            val nextFile = videoFiles[nextIdx]
+            
+            if (nextPlayer.currentMediaItem?.localConfiguration?.uri?.path != nextFile.absolutePath) {
+                nextPlayer.stop()
+                nextPlayer.clearMediaItems()
+                nextPlayer.setMediaItem(MediaItem.fromUri(nextFile.absolutePath))
+                nextPlayer.prepare()
+            }
+            nextPlayer.playWhenReady = false
+        }
+
+        val prevIdx = currentIdx - 1
+        if (prevIdx >= 0 && prevIdx < videoFiles.size) {
+            val prevPlayer = playerPool[prevIdx % 3]
+            val prevFile = videoFiles[prevIdx]
+            
+            if (prevPlayer.currentMediaItem?.localConfiguration?.uri?.path != prevFile.absolutePath) {
+                prevPlayer.stop()
+                prevPlayer.clearMediaItems()
+                prevPlayer.setMediaItem(MediaItem.fromUri(prevFile.absolutePath))
+                prevPlayer.prepare()
+            }
+            prevPlayer.playWhenReady = false
+        }
+    }
+}
 
             VerticalPager(
                 state = pagerState,
@@ -305,15 +353,15 @@ LaunchedEffect(videoFiles.size) {
                 }
 
                 Box(modifier = Modifier.fillMaxSize()) {
-                    SharedPlayerItemSurface(
-                        exoPlayer = sharedExoPlayer,
-                        isCurrentPage = pagerState.currentPage == page,
-                        onDoubleTapTriggered = {
-                            forceLikeAction()
-                        }
-                    )
+   SharedPlayerItemSurface(
+    exoPlayer = playerPool[page % 3],
+    isCurrentPage = pagerState.currentPage == page,
+    onDoubleTapTriggered = {
+        forceLikeAction()
+    }
+)
 
-                    // 🏷️ CAPTION OVERLAY BOX
+                    // CAPTION OVERLAY BOX
                     if (loopCaptionText.isNotEmpty() || loopUsernameText != "@user") {
                         var isExpanded by remember { mutableStateOf(false) }
                         val captionScrollState = rememberScrollState()
@@ -377,13 +425,22 @@ LaunchedEffect(videoFiles.size) {
                                     )
                                 }
 
+                                var totalLinesCount by remember(loopCaptionText) { mutableIntStateOf(1) }
+
                                 Text(
                                     text = loopCaptionText,
                                     color = Color.White,
                                     fontSize = 13.sp,
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = if (isExpanded) Int.MAX_VALUE else 1, 
-                                    overflow = if (isExpanded) TextOverflow.Clip else TextOverflow.Ellipsis,
+                                    overflow = if (isExpanded) {
+                                        TextOverflow.Clip
+                                    } else {
+                                        if (totalLinesCount > 1) TextOverflow.Ellipsis else TextOverflow.Clip
+                                    },
+                                    onTextLayout = { textLayoutResult ->
+                                        totalLinesCount = textLayoutResult.lineCount
+                                    },
                                     modifier = if (isExpanded) {
                                         Modifier
                                             .heightIn(max = 220.dp)
@@ -396,11 +453,10 @@ LaunchedEffect(videoFiles.size) {
                         }
                     }
 
-                    // 🎬 Moving Player Sidebar Actions (Moves with scrolling layout, hides on 0 items)
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(end = 16.dp, bottom = 160.dp), // Pushed above Termux layout boundary safely
+                            .padding(end = 16.dp, bottom = 160.dp), 
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
@@ -438,7 +494,6 @@ LaunchedEffect(videoFiles.size) {
             }
         }
 
-        // 📊 TOP STATUS CONTROLS COLUMN (Refresh stays up all the time)
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -494,7 +549,6 @@ LaunchedEffect(videoFiles.size) {
             }
         }
 
-        // 🚀 PERSISTENT OUTER SIDEBAR LAYER (Houses Termux button safely below player panels)
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
@@ -517,7 +571,6 @@ LaunchedEffect(videoFiles.size) {
                 IconButton(
                     onClick = { 
                         onLaunchTermux()
-                        Toast.makeText(context, "Termux Script Signaled!", Toast.LENGTH_SHORT).show()
                     },
                     colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Black.copy(alpha = 0.45f)),
                     modifier = Modifier.size(48.dp)
@@ -538,26 +591,27 @@ LaunchedEffect(videoFiles.size) {
             }
         }
 
-        if (showDialog) {
-            AlertDialog(
-                onDismissRequest = { showDialog = false },
-                title = { Text("Purge Cache?") },
-                text = { Text("Would you like to clear these viewed clips completely out of memory storage?") },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showDialog = false
-                            sharedExoPlayer.stop()
-                            onFeedFinished()
-                            refreshTrigger++
-                        }
-                    ) { Text("Purge & Refresh") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showDialog = false }) { Text("Keep Streams") }
+if (showDialog) {
+    AlertDialog(
+        onDismissRequest = { showDialog = false },
+        title = { Text("Purge Cache?") },
+        text = { Text("Would you like to clear these viewed clips out of storage?") },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    showDialog = false
+                    playerPool.forEach { it.stop() }
+                    onFeedFinished {
+                        refreshTrigger++
+                    }
                 }
-            )
+            ) { Text("Purge") }
+        },
+        dismissButton = {
+            TextButton(onClick = { showDialog = false }) { Text("Keep") }
         }
+    )
+}
     }
 }
 
@@ -568,28 +622,22 @@ fun SharedPlayerItemSurface(
     onDoubleTapTriggered: () -> Unit
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
-    var isPlaying by remember { mutableStateOf(true) }
+    
+    var shouldBePlaying by remember { mutableStateOf(true) }
     var progress by remember { mutableFloatStateOf(0f) }
     var isUserDraggingProgress by remember { mutableStateOf(false) }
     var displaysHeartOverlay by remember { mutableStateOf(false) }
 
-    LaunchedEffect(isCurrentPage) {
-        if (isCurrentPage) {
-            isPlaying = true
-            exoPlayer.playWhenReady = true
-        }
-    }
-
-    LaunchedEffect(isCurrentPage, isPlaying) {
+    LaunchedEffect(isCurrentPage, shouldBePlaying) {
         if (isCurrentPage) {
             while (true) {
-                if (isPlaying && !isUserDraggingProgress) {
+                if (!isUserDraggingProgress && exoPlayer.isPlaying) {
                     val timelineDuration = exoPlayer.duration.toFloat()
                     if (timelineDuration > 0) {
                         progress = exoPlayer.currentPosition.toFloat() / timelineDuration
                     }
                 }
-                delay(200)
+                delay(16)
             }
         }
     }
@@ -605,8 +653,16 @@ fun SharedPlayerItemSurface(
         val observer = LifecycleEventObserver { _, event ->
             if (isCurrentPage) {
                 when (event) {
-                    Lifecycle.Event.ON_PAUSE -> { exoPlayer.pause() }
-                    Lifecycle.Event.ON_RESUME -> { if (isPlaying) exoPlayer.play() }
+                    Lifecycle.Event.ON_PAUSE -> { 
+                        exoPlayer.pause() 
+                    }
+                    Lifecycle.Event.ON_RESUME -> { 
+                        exoPlayer.seekTo(exoPlayer.currentPosition)
+                        
+                        if (shouldBePlaying) {
+                            exoPlayer.play()
+                        }
+                    }
                     else -> {}
                 }
             }
@@ -616,38 +672,39 @@ fun SharedPlayerItemSurface(
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (isCurrentPage) {
-            AndroidView(
-                factory = { ctx ->
-                    PlayerView(ctx).apply {
-                        useController = false
-                        player = exoPlayer
-                        resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        setBackgroundColor(android.graphics.Color.BLACK)
-                    }
-                },
-                update = { playerView -> playerView.player = exoPlayer },
-                modifier = Modifier
-                    .fillMaxSize()
-                    .pointerInput(Unit) {
-                        detectTapGestures(
-                            onTap = {
-                                isPlaying = !isPlaying
-                                exoPlayer.playWhenReady = !isPlaying
-                            },
-                            onDoubleTap = {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    useController = false
+                    player = exoPlayer
+                    resizeMode = androidx.media3.ui.AspectRatioFrameLayout.RESIZE_MODE_FIT
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                }
+            },
+            update = { playerView -> playerView.player = exoPlayer },
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onTap = {
+                            if (isCurrentPage) {
+                                val targetState = !exoPlayer.isPlaying
+                                shouldBePlaying = targetState
+                                exoPlayer.playWhenReady = targetState
+                            }
+                        },
+                        onDoubleTap = {
+                            if (isCurrentPage) {
                                 displaysHeartOverlay = true
                                 onDoubleTapTriggered()
                             }
-                        )
-                    }
-            )
-        } else {
-            Box(modifier = Modifier.fillMaxSize())
-        }
+                        }
+                    )
+                }
+        )
 
         AnimatedVisibility(
-            visible = displaysHeartOverlay,
+            visible = displaysHeartOverlay && isCurrentPage,
             enter = fadeIn() + scaleIn(initialScale = 0.5f),
             exit = fadeOut() + scaleOut(targetScale = 1.3f),
             modifier = Modifier.align(Alignment.Center)
@@ -705,6 +762,7 @@ fun SharedPlayerItemSurface(
                         .align(Alignment.Center)
                         .background(Color.White.copy(alpha = 0.24f), shape = RoundedCornerShape(1.5.dp))
                 )
+                
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(fraction = progress)

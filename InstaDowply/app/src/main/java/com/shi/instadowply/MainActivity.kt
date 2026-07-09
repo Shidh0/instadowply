@@ -1,5 +1,12 @@
 package com.shi.instadowply
 
+import androidx.compose.ui.platform.LocalContext
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -17,134 +24,170 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import java.io.File
+import android.widget.Toast
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var sharedReelsDir: File
-    private lateinit var oldReelsDir: File // 📂 Track old visible directory reference
+    private lateinit var oldReelsDir: File 
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val publicStorage = Environment.getExternalStorageDirectory()
-        oldReelsDir = File(publicStorage, "Reels")    // Old path
-        sharedReelsDir = File(publicStorage, ".Reels")  // New hidden path with a dot
+        oldReelsDir = File(publicStorage, "Reels")    
+        sharedReelsDir = File(publicStorage, ".Reels") 
 
-        // Fetch the index position where the user left off last time
         val prefs = getSharedPreferences("instadowply_cache", Context.MODE_PRIVATE)
         val initialSavedIndex = prefs.getInt("LAST_WATCHED_INDEX", 0)
 
         setContent {
-            MaterialTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    var showPermissionDialog by remember { mutableStateOf(false) }
+    MaterialTheme {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background
+        ) {
+            val context = LocalContext.current
+            var showPermissionDialog by remember { mutableStateOf(false) }
+            
+            var showTermuxPermissionDialog by remember { mutableStateOf(false) }
 
-                    LaunchedEffect(Unit) {
-                        if (!Environment.isExternalStorageManager()) {
-                            showPermissionDialog = true
-                        } else {
-                            // 🚀 Run migration instantly on startup if storage access is authorized
-                            handleMigrationAndFolderSetup()
-                        }
-                    }
+            fun hasTermuxPermission(): Boolean {
+                return ContextCompat.checkSelfPermission(
+                    context, 
+                    "com.termux.permission.RUN_COMMAND"
+                ) == PackageManager.PERMISSION_GRANTED
+            }
 
-                    // Pass tracking parameters directly to the engine screen surface
-                    ReelPlayerScreen(
-                        videoDirectory = sharedReelsDir,
-                        initialPage = initialSavedIndex,
-                        onPageChanged = { index -> saveProgressState(index) },
-                        onFeedFinished = { purgeCache() },
-                        onLaunchTermux = { launchTermuxScript() }
-                    )
+            LaunchedEffect(Unit) {
+                if (!Environment.isExternalStorageManager()) {
+                    showPermissionDialog = true
+                } else if (!hasTermuxPermission()) {
+                    showTermuxPermissionDialog = true
+                } else {
+                    handleMigrationAndFolderSetup()
+                }
+            }
 
-                    if (showPermissionDialog) {
-                        AlertDialog(
-                            onDismissRequest = { },
-                            title = { Text("Storage Access Required") },
-                            text = { Text("InstaDowply needs 'All Files Access' to play video streams from your shared storage folder.\n\nPlease enable it on the next screen.") },
-                            confirmButton = {
-                                TextButton(
-                                    onClick = {
-                                        showPermissionDialog = false
-                                        openAllFilesAccessSettings()
-                                    }
-                                ) { Text("Grant Access") }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { finish() }) { Text("Exit App") }
-                            }
-                        )
+            ReelPlayerScreen(
+                videoDirectory = sharedReelsDir,
+                initialPage = initialSavedIndex,
+                onPageChanged = { index -> saveProgressState(index) },
+                onFeedFinished = { onRefreshReady -> purgeCache { onRefreshReady() } },
+                onLaunchTermux = { 
+                    if (hasTermuxPermission()) {
+                        launchTermuxScript()
+                    } else {
+                        showTermuxPermissionDialog = true
                     }
                 }
+            )
+            
+            if (showPermissionDialog) {
+                AlertDialog(
+                    onDismissRequest = { },
+                    title = { Text("Storage Access Required") },
+                    text = { Text("InstaDowply needs 'All Files Access' to play video streams from your shared storage folder.\n\nPlease enable it on the next screen.") },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showPermissionDialog = false
+                                openAllFilesAccessSettings()
+                            }
+                        ) { Text("Grant Access") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { finish() }) { Text("Exit App") }
+                    }
+                )
+            }
+
+            if (showTermuxPermissionDialog) {
+                AlertDialog(
+                    onDismissRequest = { showTermuxPermissionDialog = false },
+                    title = { Text("Termux Automation Required") },
+                    text = { 
+                        Text("InstaDowply needs authorization to pass back-end commands to Termux to execute your scraping scripts.\n\n" +
+                             "Please tap Grant, look for 'Additional Permissions' or 'Permissions', and allow 'Run commands in Termux environment'.") 
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                showTermuxPermissionDialog = false
+                                try {
+                                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                        data = Uri.fromParts("package", packageName, null)
+                                    }
+                                    startActivity(intent)
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                            }
+                        ) { Text("Grant Access") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showTermuxPermissionDialog = false }) { Text("Cancel") }
+                    }
+                )
             }
         }
     }
+}
+}
 
     override fun onResume() {
         super.onResume()
-        // 🚀 Triggers migration if user just returned from granting "All Files Access"
         if (Environment.isExternalStorageManager()) {
             handleMigrationAndFolderSetup()
         }
     }
 
-    /**
-     * 🛠️ Checks for the legacy directory, copies contents over, and removes old footprint
-     */
     private fun handleMigrationAndFolderSetup() {
-        try {
-            if (oldReelsDir.exists() && oldReelsDir.isDirectory) {
-                // Ensure the hidden targeted .Reels folder is ready
-                if (!sharedReelsDir.exists()) {
-                    sharedReelsDir.mkdirs()
-                }
+        lifecycleScope.launch {
+            
+            withContext(Dispatchers.IO) {
+                try {
+                    if (oldReelsDir.exists() && oldReelsDir.isDirectory) {
+                        if (!sharedReelsDir.exists()) {
+                            sharedReelsDir.mkdirs()
+                        }
 
-                // Batch stream all internal assets across directories
-                val legacyFiles = oldReelsDir.listFiles()
-                legacyFiles?.forEach { file ->
-                    if (file.isFile) {
-                        val destinationTarget = File(sharedReelsDir, file.name)
-                        
-                        // Use instantaneous file table pointer migration (renameTo)
-                        val movedSuccessfully = file.renameTo(destinationTarget)
-                        
-                        // Stream-copy fallback if storage controller flags are busy
-                        if (!movedSuccessfully) {
-                            try {
-                                file.inputStream().use { input ->
-                                    destinationTarget.outputStream().use { output ->
-                                        input.copyTo(output)
+                        val legacyFiles = oldReelsDir.listFiles()
+                        legacyFiles?.forEach { file ->
+                            if (file.isFile) {
+                                val destinationTarget = File(sharedReelsDir, file.name)
+                                val movedSuccessfully = file.renameTo(destinationTarget)
+                                if (!movedSuccessfully) {
+                                    try {
+                                        file.inputStream().use { input ->
+                                            destinationTarget.outputStream().use { output ->
+                                                input.copyTo(output)
+                                            }
+                                        }
+                                        file.delete()
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
                                     }
                                 }
-                                file.delete()
-                            } catch (e: Exception) {
-                                e.printStackTrace()
                             }
                         }
-                    }
-                }
 
-                // Delete the old visible container folder if it is completely empty now
-                if (oldReelsDir.listFiles()?.isEmpty() == true) {
-                    oldReelsDir.delete()
-                }
-            } else {
-                // Standard startup routine if old version doesn't exist
-                if (!sharedReelsDir.exists()) {
-                    sharedReelsDir.mkdirs()
+                        if (oldReelsDir.listFiles()?.isEmpty() == true) {
+                            oldReelsDir.delete()
+                        }
+                    } else {
+                        if (!sharedReelsDir.exists()) {
+                            sharedReelsDir.mkdirs()
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+            
         }
     }
-
-    /**
-     * Commits the active vertical scroll page index to disk safely
-     */
+    
     private fun saveProgressState(index: Int) {
         val prefs = getSharedPreferences("instadowply_cache", Context.MODE_PRIVATE)
         prefs.edit().putInt("LAST_WATCHED_INDEX", index).apply()
@@ -164,35 +207,42 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun launchTermuxScript() {
-        try {
-            val intent = Intent().apply {
-                setClassName("com.termux", "com.termux.app.TermuxActivity")
-                action = Intent.ACTION_MAIN
-                addCategory(Intent.CATEGORY_LAUNCHER)
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-        } catch (e: Exception) {
-            e.printStackTrace()
+    try {
+        val intent = Intent().apply {
+            setClassName("com.termux", "com.termux.app.RunCommandService")
+            action = "com.termux.RUN_COMMAND"
+            putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/home/sync_reels.sh")
+            putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
+            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
         }
+        
+        startService(intent)
+        
+    } catch (e: Exception) {
+        e.printStackTrace()
+        Toast.makeText(this, "Failed to connect to Termux engine backend.", Toast.LENGTH_LONG).show()
     }
+}
 
-    private fun purgeCache() {
+private fun purgeCache(onComplete: () -> Unit) {
+    lifecycleScope.launch(Dispatchers.IO) {
         try {
             if (Environment.isExternalStorageManager() && sharedReelsDir.exists()) {
                 sharedReelsDir.listFiles()?.forEach { file ->
-                    // Deletes mp4, txt, jpg, and user.txt by looking for the base prefix
                     if (file.isFile && file.name.startsWith("reel_")) {
                         file.delete()
                     }
                 }
-                // Reset to Index 0 (Reel 1) since memory is cleared
                 saveProgressState(0)
+            }
+            withContext(Dispatchers.Main) {
+                onComplete()
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
+}
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
