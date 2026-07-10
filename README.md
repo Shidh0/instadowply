@@ -12,12 +12,12 @@ An app to download and watch instagram fyp reels  offline
 # Overview 
 * App/Player👇🏻
   
-<img width="720" height="1506" alt="1000051247" src="https://github.com/user-attachments/assets/48d0636f-3173-4201-a992-20f5a1f08af5" />
+<img width="720" height="1493" alt="IMG_20260710_161153" src="https://github.com/user-attachments/assets/093ed4c1-cd96-4e1d-b62b-ddb0e5866976" />
 
-<img width="711" height="1486" alt="1000053017" src="https://github.com/user-attachments/assets/91e8aa5c-6392-4f94-ae42-750f68a7a906" />
+<img width="720" height="1498" alt="IMG_20260710_161305" src="https://github.com/user-attachments/assets/f530d5f7-445a-4b94-acc8-3f818c1cedc7" />
 
+<img width="720" height="1501" alt="IMG_20260710_161355" src="https://github.com/user-attachments/assets/bdbe9039-6104-4faf-8308-dcfc7eba5cb4" />
 
-<img width="720" height="1491" alt="1000053015" src="https://github.com/user-attachments/assets/1bcd5c19-646f-429e-aef4-ba173fa60e55" />
 
 * Termux/script👇🏻
 
