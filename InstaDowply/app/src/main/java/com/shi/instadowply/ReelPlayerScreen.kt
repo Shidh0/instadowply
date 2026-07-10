@@ -237,7 +237,7 @@ val playerPool = remember(context) {
                 if (fileToSave.exists()) {
                     fileToSave.copyTo(destination, overwrite = true)
                     isCurrentVideoSaved = true
-                    Toast.makeText(context, "Copied to Download/InstaSaved ✨", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Copied to Download/InstaSaved", Toast.LENGTH_SHORT).show()
                     
                     android.media.MediaScannerConnection.scanFile(
                         context,
