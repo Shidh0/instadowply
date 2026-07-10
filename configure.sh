@@ -60,7 +60,6 @@ if [[ "$edit_intent" =~ ^[Yy]$ ]]; then
 
     if [ "$intent_choice" == "1" ]; then
         cat << 'BASHRC_EOF' >> "$BASHRC"
-
 # --- Insta-Bulk-Grabber Automation ---
 clear
 grablog() {
@@ -75,7 +74,6 @@ BASHRC_EOF
         echo "✅ Successfully assigned execution routine to Background Intent Mode!"
     elif [ "$intent_choice" == "2" ]; then
         cat << 'BASHRC_EOF' >> "$BASHRC"
-
 # --- Insta-Bulk-Grabber Automation ---
 clear
 echo "----Starting downloads----"
