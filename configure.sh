@@ -42,6 +42,54 @@ if [[ "$edit_cookies" =~ ^[Yy]$ ]]; then
         echo "❌ Error: cookies.json not found!"
     fi
 fi
+# 3. Ask about Launch Intent Execution Mode
+echo "3. Termux Intent Launch Configuration"
+read -p "Do you want to switch or update your Termux Launch Intent mode? (y/n): " edit_intent
+if [[ "$edit_intent" =~ ^[Yy]$ ]]; then
+    echo "Select Execution Layout:"
+    echo "1) Background Intent Mode (Runs script invisibly and streams logs)"
+    echo "2) Foreground Launch Mode (Executes script directly in terminal and closes)"
+    read -p "Enter layout path choice (1 or 2): " intent_choice
 
+    BASHRC="$PREFIX/etc/bash.bashrc"
+    
+    # Clean out any old, messy iterations of the automation blocks first
+    if [ -f "$BASHRC" ]; then
+        sed -i '/# --- Insta-Bulk-Grabber Automation ---/,/BASHRC_END/d' "$BASHRC"
+        sed -i '/# --- Insta-Bulk-Grabber Automation ---/,$d' "$BASHRC" 2>/dev/null
+    fi
+
+    if [ "$intent_choice" == "1" ]; then
+        cat << 'BASHRC_EOF' >> "$BASHRC"
+
+# --- Insta-Bulk-Grabber Automation ---
+clear
+grablog() {
+    trap "pkill -TERM -f 'node android_grabber.js'; clear" SIGINT
+    clear
+    tail -f insta-bulk-grabber/live_crawler.log
+    trap - SIGINT
+}
+grablog
+# BASHRC_END
+BASHRC_EOF
+        echo "✅ Successfully assigned execution routine to Background Intent Mode!"
+    elif [ "$intent_choice" == "2" ]; then
+        cat << 'BASHRC_EOF' >> "$BASHRC"
+
+# --- Insta-Bulk-Grabber Automation ---
+clear
+echo "----Starting downloads----"
+node insta-bulk-grabber/android_grabber.js&
+NODE_PID=$!
+wait $NODE_PID
+exit
+# BASHRC_END
+BASHRC_EOF
+        echo "✅ Successfully assigned execution routine to Foreground Launch Mode!"
+    else
+        echo "❌ Invalid configuration choice selection. Intent script unchanged."
+    fi
+fi
 echo ""
 echo "Configuration complete!"
