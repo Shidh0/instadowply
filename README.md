@@ -92,4 +92,5 @@ npx playwright install chromium --with-deps
  * Copy reel link
  * Repost (not sure)
  * Save in Instagram (not sure)
+ * Intrested/Not Interested button(instagram sync)
  * Many more..
