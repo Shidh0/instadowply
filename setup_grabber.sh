@@ -69,7 +69,6 @@ if [[ "$confirm_boot" =~ ^[Yy]$ ]]; then
     fi
 
     cat << 'BASHRC_EOF' >> "$BASHRC"
-
 # --- Insta-Bulk-Grabber Automation ---
 clear
 grablog() {
