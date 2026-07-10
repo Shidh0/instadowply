@@ -19,7 +19,10 @@ pkg install libcairo libpango libxi libxtst libxcomposite libxdamage alsa-lib -y
 # 3. Request storage access if not already granted
 echo "Requesting storage permissions..."
 termux-setup-storage
-echo "allow-external-apps = true" >> ~/.termux/termux.properties
+mkdir -p ~/.termux
+if ! grep -q "allow-external-apps = true" ~/.termux/termux.properties 2>/dev/null; then
+    echo "allow-external-apps = true" >> ~/.termux/termux.properties
+fi
 
 # 4. Create directory and download necessary files
 echo "Downloading project core files..."
@@ -56,10 +59,16 @@ echo " NOTE: If you skip this part, the 'Start Script' button"
 echo "   inside the InstaDowply app Won't work."
 echo "--------------------------------------------------------"
 read -p "Do you want to enable this feature? (y/n): " confirm_boot
-
 if [[ "$confirm_boot" =~ ^[Yy]$ ]]; then
     echo "Injecting boot routine into Termux start scripts..."
-    cat << 'BASHRC_EOF' >> $PREFIX/etc/bash.bashrc
+    BASHRC="$PREFIX/etc/bash.bashrc"
+    
+    # Wipe any existing automation layout sections safely
+    if [ -f "$BASHRC" ]; then
+        sed -i '/# --- Insta-Bulk-Grabber Automation ---/,/BASHRC_END/d' "$BASHRC"
+    fi
+
+    cat << 'BASHRC_EOF' >> "$BASHRC"
 
 # --- Insta-Bulk-Grabber Automation ---
 clear
@@ -70,10 +79,11 @@ grablog() {
     trap - SIGINT
 }
 grablog
+# BASHRC_END
 BASHRC_EOF
-    echo "✅ Auto-start configuration successfully added to bash.bashrc."
+    echo "✅ Configuration successfully added to bash.bashrc."
 else
-    echo "⏭️  Skipped auto-start configuration. Your bash.bashrc was left untouched."
+    echo "⏭️  Skipped Configuration. Your bash.bashrc was left untouched."
 fi
 
 echo ""
