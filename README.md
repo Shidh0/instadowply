@@ -8,6 +8,7 @@ An app to download and watch instagram fyp reels  offline
   - [Lunix](#Lunix)
 * [Warnings](#use-this-with-caution)
 * [Script Update Notes](#script-updates)
+* [Upcoming Features](#upcoming-features)
 # Overview 
 * App/Player👇🏻
   
