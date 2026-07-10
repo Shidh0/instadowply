@@ -85,3 +85,11 @@ npx playwright install chromium --with-deps
 * Added a Queue backlog file that get created when you Ctrl+C to interrupt the script
 * Added some fixes to save bandwidth and increase speed.
 * some fixes (im lazy..)
+
+# Upcoming Features
+ * Comments (not sure)
+ * Open in Instagram/browser
+ * Copy reel link
+ * Repost (not sure)
+ * Save in Instagram (not sure)
+ * Many more..
