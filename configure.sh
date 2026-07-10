@@ -53,10 +53,9 @@ if [[ "$edit_intent" =~ ^[Yy]$ ]]; then
 
     BASHRC="$PREFIX/etc/bash.bashrc"
     
-    # Clean out any old, messy iterations of the automation blocks first
+    # Clean out older iterations of automation configurations before rewriting
     if [ -f "$BASHRC" ]; then
         sed -i '/# --- Insta-Bulk-Grabber Automation ---/,/BASHRC_END/d' "$BASHRC"
-        sed -i '/# --- Insta-Bulk-Grabber Automation ---/,$d' "$BASHRC" 2>/dev/null
     fi
 
     if [ "$intent_choice" == "1" ]; then
