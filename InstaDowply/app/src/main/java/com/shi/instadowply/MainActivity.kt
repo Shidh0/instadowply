@@ -207,20 +207,35 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun launchTermuxScript() {
-    try {
-        val intent = Intent().apply {
-            setClassName("com.termux", "com.termux.app.RunCommandService")
-            action = "com.termux.RUN_COMMAND"
-            putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/home/sync_reels.sh")
-            putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
-            putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+    val prefs = getSharedPreferences("instadowply_cache", Context.MODE_PRIVATE)
+    val useBackgroundIntent = prefs.getBoolean("USE_BACKGROUND_INTENT", true)
+
+    if (useBackgroundIntent) {
+        try {
+            val intent = Intent().apply {
+                setClassName("com.termux", "com.termux.app.RunCommandService")
+                action = "com.termux.RUN_COMMAND"
+                putExtra("com.termux.RUN_COMMAND_PATH", "/data/data/com.termux/files/home/sync_reels.sh")
+                putExtra("com.termux.RUN_COMMAND_WORKDIR", "/data/data/com.termux/files/home")
+                putExtra("com.termux.RUN_COMMAND_BACKGROUND", true)
+            }
+            startService(intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Failed to connect to Termux engine backend.", Toast.LENGTH_LONG).show()
         }
-        
-        startService(intent)
-        
-    } catch (e: Exception) {
-        e.printStackTrace()
-        Toast.makeText(this, "Failed to connect to Termux engine backend.", Toast.LENGTH_LONG).show()
+    } else {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage("com.termux")
+            if (intent != null) {
+                startActivity(intent)
+            } else {
+                Toast.makeText(this, "Termux app could not be found.", Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Failed to launch Termux application foreground.", Toast.LENGTH_LONG).show()
+        }
     }
 }
 

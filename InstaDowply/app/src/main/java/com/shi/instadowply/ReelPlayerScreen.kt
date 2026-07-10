@@ -1,5 +1,7 @@
 package com.shi.instadowply
 
+import android.content.Context
+import androidx.compose.material.icons.filled.Settings
 import android.graphics.BitmapFactory
 import android.widget.Toast
 import androidx.compose.animation.*
@@ -58,6 +60,9 @@ fun ReelPlayerScreen(
     val context = LocalContext.current
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var isTermuxRunning by remember { mutableStateOf(false) }
+    val prefs = remember { context.getSharedPreferences("instadowply_cache", Context.MODE_PRIVATE) }
+    var useBackgroundIntent by remember { mutableStateOf(prefs.getBoolean("USE_BACKGROUND_INTENT", true)) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
     val lockFile = remember(videoDirectory) { File(videoDirectory, "download.lock") }
     LaunchedEffect(lockFile) {
         while (true) {
@@ -523,6 +528,21 @@ DisposableEffect(Unit) {
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp)
             ) {
+                IconButton(
+                    onClick = { showSettingsDialog = true },
+                    colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Transparent),
+                    modifier = Modifier
+                        .align(Alignment.CenterStart)
+                        .size(44.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Open App Settings",
+                        tint = Color.White,
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+
                 if (videoFiles.isNotEmpty()) {
                     Text(
                         text = "${pagerState.currentPage + 1} / ${videoFiles.size}",
@@ -592,28 +612,61 @@ DisposableEffect(Unit) {
         }
 
 if (showDialog) {
-    AlertDialog(
-        onDismissRequest = { showDialog = false },
-        title = { Text("Purge Cache?") },
-        text = { Text("Would you like to clear these viewed clips out of storage?") },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    showDialog = false
-                    playerPool.forEach { it.stop() }
-                    onFeedFinished {
-                        refreshTrigger++
+            AlertDialog(
+                onDismissRequest = { showDialog = false },
+                title = { Text("Purge Cache?") },
+                text = { Text("Would you like to clear these viewed clips out of storage?") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showDialog = false
+                            playerPool.forEach { it.stop() }
+                            onFeedFinished {
+                                refreshTrigger++
+                            }
+                        }
+                    ) { Text("Purge") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showDialog = false }) { Text("Keep") }
+                }
+            )
+        }
+
+        if (showSettingsDialog) {
+            AlertDialog(
+                onDismissRequest = { showSettingsDialog = false },
+                title = { Text("Configurations") },
+                text = {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text("Use Background Intent", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Text("Turning this off fixes launch termux button on some devices. You will need to reconfigure in termux after a change.(Run command: ./insta-bulk-grabber/configure.sh)", fontSize = 12.sp, color = Color.Gray)
+                        }
+                        Switch(
+                            checked = useBackgroundIntent,
+                            onCheckedChange = { isChecked ->
+                                useBackgroundIntent = isChecked
+                                prefs.edit().putBoolean("USE_BACKGROUND_INTENT", isChecked).apply()
+                            }
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showSettingsDialog = false }) {
+                        Text("Save & Close")
                     }
                 }
-            ) { Text("Purge") }
-        },
-        dismissButton = {
-            TextButton(onClick = { showDialog = false }) { Text("Keep") }
+            )
         }
-    )
-}
-    }
-}
+    } 
+} 
 
 @Composable
 fun SharedPlayerItemSurface(
