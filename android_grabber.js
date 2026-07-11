@@ -1,4 +1,3 @@
-// 🔥 FORCE PLAYWRIGHT TO THINK THIS IS LINUX
 Object.defineProperty(process, 'platform', { value: 'linux' });
 
 // ============================================================================
@@ -21,8 +20,8 @@ const path = require('path');
 const CHROMIUM_PATH = '/data/data/com.termux/files/usr/bin/chromium-browser';
 const COOKIES_FILE = path.join(__dirname, 'cookies.json');
 const HISTORY_FILE = path.join(__dirname, 'history.json');
-const QUEUE_BACKLOG_FILE = path.join(__dirname, 'queue_backlog.json'); // 📦 Persistent Queue State
-const DOWNLOAD_FOLDER = '/storage/emulated/0/.Reels'; // 🛑 Hidden directory with leading dot
+const QUEUE_BACKLOG_FILE = path.join(__dirname, 'queue_backlog.json'); 
+const DOWNLOAD_FOLDER = '/storage/emulated/0/.Reels';
 const LOCK_FILE_PATH = path.join(DOWNLOAD_FOLDER, 'download.lock');
 
 // ============================================================================
@@ -49,9 +48,9 @@ process.on('SIGINT', cleanupAndExit);
 process.on('SIGTERM', cleanupAndExit);
 process.on('SIGHUP', cleanupAndExit);
 
-const TARGET_DOWNLOAD_COUNT = 100;
+const TARGET_DOWNLOAD_COUNT = 200;
 const MAX_HISTORY_SIZE = 15000;
-const MAX_CONCURRENT_DOWNLOADS = 3; // ⚡ Parallelize IO download pipelines to maximize storage write speeds
+const MAX_CONCURRENT_DOWNLOADS = 3;
 
 if (!fs.existsSync(DOWNLOAD_FOLDER)) {
     fs.mkdirSync(DOWNLOAD_FOLDER, { recursive: true });
@@ -68,7 +67,6 @@ if (fs.existsSync(HISTORY_FILE)) {
     }
 }
 
-// Restore background un-downloaded queue backup items if they exist
 let downloadQueue = []; 
 if (fs.existsSync(QUEUE_BACKLOG_FILE)) {
     try {
@@ -270,13 +268,21 @@ async function processPlayerLikes(page) {
 // ============================================================================
 async function executeIndividualDownload(task) {
     const filePath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.mp4`);
-    const captionPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.txt`);
     const pfpPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.jpg`);
-    const userPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_user.txt`);
+    const songPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_song.jpg`); // Added for song artwork
+    const metadataPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_metadata.json`); 
 
-    if (task.username) {
-        try { fs.writeFileSync(userPath, `@${task.username}`, 'utf8'); } catch(e){}
+    // Directly dumps the entire unedited Instagram structural item response
+    if (task.rawMetadata) {
+        try { 
+            fs.writeFileSync(metadataPath, JSON.stringify(task.rawMetadata, null, 2), 'utf8'); 
+        } catch (e) {}
     }
+
+   const commonHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+    };
 
     if (task.pfpUrl) {
         try {
@@ -284,10 +290,28 @@ async function executeIndividualDownload(task) {
                 method: 'GET',
                 url: task.pfpUrl,
                 responseType: 'arraybuffer',
-                timeout: 10000
+                timeout: 10000,
+                headers: commonHeaders
             });
             fs.writeFileSync(pfpPath, pfpResponse.data);
-        } catch (e) {}
+        } catch (e) {
+            console.log(` ⚠️ Profile pic download skipped for ${task.id}: ${e.message}`);
+        }
+    }
+
+    if (task.songImgUrl) {
+        try {
+            const songResponse = await axios({
+                method: 'GET',
+                url: task.songImgUrl,
+                responseType: 'arraybuffer',
+                timeout: 10000,
+                headers: commonHeaders
+            });
+            fs.writeFileSync(songPath, songResponse.data);
+        } catch (e) {
+            console.log(` ⚠️ Song image download failed for ${task.id}: ${e.message}`);
+        }
     }
 
     try {
@@ -310,12 +334,6 @@ async function executeIndividualDownload(task) {
             writer.on('finish', () => {
                 downloadCount++;
                 saveToHistory(task.id); 
-
-                if (task.caption && task.caption.trim().length > 0) {
-                    try {
-                        fs.writeFileSync(captionPath, task.caption, 'utf8');
-                    } catch (e) {}
-                }
                 resolve(true); 
             });
 
@@ -328,8 +346,7 @@ async function executeIndividualDownload(task) {
             response.data.on('error', handleFailure);
             writer.on('error', handleFailure);
         });
-} catch (error) {
-        // Check if the link is dead due to signature expiration (returns 403 or 410)
+    } catch (error) {
         if (error.response && (error.response.status === 403 || error.response.status === 410)) {
             return 'EXPIRED';
         }
@@ -387,6 +404,11 @@ function findVideoUrls(obj, foundLinks = []) {
         const username = obj.user?.username || obj.owner?.username || 'Instagram User';
         const pfpUrl = obj.user?.profile_pic_url || obj.owner?.profile_pic_url || '';
         
+        // Safely extracts the cover artwork URI across varying Instagram response formats
+        const songImgUrl = obj.clips_metadata?.music_info?.music_asset_info?.cover_artwork_uri || 
+                           obj.clips_metadata?.music_info?.music_asset_info?.cover_artwork_thumbnail_uri || 
+                           obj.music_info?.music_asset_info?.cover_artwork_uri || '';
+
         const highestResVideo = obj.video_versions.reduce((max, video) => {
             const currentArea = (video.width || 0) * (video.height || 0);
             const maxArea = (max.width || 0) * (max.height || 0);
@@ -398,7 +420,9 @@ function findVideoUrls(obj, foundLinks = []) {
             id: id, 
             caption: captionText,
             username: username,
-            pfpUrl: pfpUrl
+            pfpUrl: pfpUrl,
+            songImgUrl: songImgUrl, // Appended to task payload
+            rawMetadata: obj // Passes down the entire structural object tree intact
         });
     }
     
@@ -491,7 +515,7 @@ async function dismissLoginPopup(page) {
     
     const page = await context.newPage();
     
-    page.on('response', async (response) => {
+page.on('response', async (response) => {
         const url = response.url();
         const contentType = response.headers()['content-type'] || '';
         
@@ -511,7 +535,6 @@ async function dismissLoginPopup(page) {
             } catch (e) {}
         }
     });
-
     try {
         console.log('Navigating directly to Reels target area...');
         await page.goto('https://www.instagram.com/reels/', {
@@ -601,18 +624,19 @@ async function dismissLoginPopup(page) {
         } catch (swipeError) {
             try { await page.evaluate(() => window.scrollBy(0, window.innerHeight)); } catch(e){}
         }
-       // ⏳ Allow 1.5 seconds for the API context to trigger, then freeze the browser video player
-await page.waitForTimeout(1500);
-await page.evaluate(() => {
-    document.querySelectorAll('video').forEach(video => {
-        if (video && typeof video.pause === 'function') {
-            video.pause();
-            // Tells the browser to stop downloading data for this stream pipeline
-            video.removeAttribute('src'); 
-            video.load(); 
-        }
-    });
-}).catch(() => {});
+        
+        await page.waitForTimeout(1500);
+        
+        await page.evaluate(() => {
+            document.querySelectorAll('video').forEach(video => {
+                if (video && typeof video.pause === 'function') {
+                    video.pause();
+                    video.removeAttribute('src'); 
+                    video.load(); 
+                }
+            });
+        }).catch(() => {});
+
         if (downloadCount === lastDownloadCount) {
             stuckCounter++;
             
