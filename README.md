@@ -87,10 +87,10 @@ npx playwright install chromium --with-deps
 * some fixes (im lazy..)
 
 # Upcoming Features
- * ~~Comments~~
- * Open in Instagram/browser
- * Share
- * Copy reel link
+ * ~~Comments~~ X
+ * Open in Instagram/browser ✓
+ * Share ✓
+ * Copy reel link ✓
  * Repost (not sure)
  * Save in Instagram (not sure)
  * Intrested/Not Interested button(instagram sync)
