@@ -226,19 +226,35 @@ class MainActivity : ComponentActivity() {
         }
     } else {
         try {
-            val intent = packageManager.getLaunchIntentForPackage("com.termux")
-            if (intent != null) {
-                startActivity(intent)
-            } else {
-                Toast.makeText(this, "Termux app could not be found.", Toast.LENGTH_LONG).show()
+            // Stage 1: Attempt standard package launch manager routing
+            var intent = packageManager.getLaunchIntentForPackage("com.termux")
+            
+            // Stage 2: Aggressive Fallback - Explicitly target Termux main system activity 
+            // This bypasses package visibility filtering restrictions on Android 11+
+            if (intent == null) {
+                intent = Intent().apply {
+                    setClassName("com.termux", "com.termux.app.TermuxActivity")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
             }
+            startActivity(intent)
         } catch (e: Exception) {
             e.printStackTrace()
-            Toast.makeText(this, "Failed to launch Termux application foreground.", Toast.LENGTH_LONG).show()
+            // Stage 3: Ultra-Aggressive Fallback - Absolute structural fallback intent
+            try {
+                val fallbackIntent = Intent(Intent.ACTION_MAIN).apply {
+                    setClassName("com.termux", "com.termux.app.TermuxActivity")
+                    addCategory(Intent.CATEGORY_LAUNCHER)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(fallbackIntent)
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+                Toast.makeText(this, "Termux application could not be located or targeted.", Toast.LENGTH_LONG).show()
+            }
         }
     }
 }
-
 private fun purgeCache(onComplete: () -> Unit) {
     lifecycleScope.launch(Dispatchers.IO) {
         try {

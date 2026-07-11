@@ -1,6 +1,10 @@
 package com.shi.instadowply
 
+import java.math.BigInteger
+import androidx.compose.ui.draw.alpha
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.material.icons.filled.Settings
 import android.graphics.BitmapFactory
 import android.widget.Toast
@@ -49,6 +53,42 @@ import androidx.lifecycle.LifecycleEventObserver
 import java.io.File
 import kotlinx.coroutines.delay
 
+/**
+ * Converts a raw Instagram numeric Media ID into its corresponding URL shortcode.
+ */
+fun convertNumericIdToShortcode(numericId: String): String {
+    val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    val radix = BigInteger.valueOf(64)
+    
+    return try {
+        // Strip any trailing user details if the ID format is "mediaID_userID"
+        val cleanId = numericId.substringBefore("_").trim()
+        var id = BigInteger(cleanId)
+        
+        if (id == BigInteger.ZERO) return ""
+        
+        val shortcodeBuilder = StringBuilder()
+        while (id > BigInteger.ZERO) {
+            val remainder = id.mod(radix).toInt()
+            shortcodeBuilder.append(alphabet[remainder])
+            id = id.divide(radix)
+        }
+        
+        // Reverse the string since we calculated it from least to most significant bits
+        shortcodeBuilder.reverse().toString()
+    } catch (e: Exception) {
+        "" // Fallback or log error if string isn't a valid numeric string
+    }
+}
+
+fun formatMetricCount(count: Int): String {
+    return when {
+        count >= 1_000_000 -> String.format("%.1fM", count / 1_000_000f).replace(".0", "")
+        count >= 1_000 -> String.format("%.1fk", count / 1_000f).replace(".0", "")
+        else -> count.toString()
+    }
+}
+
 @Composable
 fun ReelPlayerScreen(
     videoDirectory: File,
@@ -81,19 +121,19 @@ fun ReelPlayerScreen(
         pageCount = { videoFiles.size }
     )
     
-LaunchedEffect(videoFiles.size) {
-    if (videoFiles.isEmpty() && pagerState.currentPage != 0) {
-        pagerState.scrollToPage(0)
-    }
-}
-val playerPool = remember(context) {
-    List(3) {
-        ExoPlayer.Builder(context).build().apply {
-            repeatMode = Player.REPEAT_MODE_ONE
-            playWhenReady = false
+    LaunchedEffect(videoFiles.size) {
+        if (videoFiles.isEmpty() && pagerState.currentPage != 0) {
+            pagerState.scrollToPage(0)
         }
     }
-}
+    val playerPool = remember(context) {
+        List(3) {
+            ExoPlayer.Builder(context).build().apply {
+                repeatMode = Player.REPEAT_MODE_ONE
+                playWhenReady = false
+            }
+        }
+    }
     var showDialog by remember { mutableStateOf(false) }
 
     val currentVideoFile = videoFiles.getOrNull(pagerState.currentPage)
@@ -172,6 +212,117 @@ val playerPool = remember(context) {
         }.build()
     }
 
+    // NEW: Open Link App Action Vector Path Configuration
+    val instagramAppIcon = remember {
+        androidx.compose.ui.graphics.vector.ImageVector.Builder(
+            name = "InstagramAppIcon",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).path(
+            stroke = androidx.compose.ui.graphics.SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = androidx.compose.ui.graphics.StrokeCap.Round,
+            strokeLineJoin = androidx.compose.ui.graphics.StrokeJoin.Round
+        ) {
+            moveTo(7f, 2f)
+            horizontalLineTo(17f)
+            curveTo(19.76f, 2f, 22f, 4.24f, 22f, 7f)
+            verticalLineTo(17f)
+            curveTo(22f, 19.76f, 19.76f, 22f, 17f, 22f)
+            horizontalLineTo(7f)
+            curveTo(4.24f, 22f, 2f, 19.76f, 2f, 17f)
+            verticalLineTo(7f)
+            curveTo(2f, 4.24f, 4.24f, 2f, 7f, 2f)
+            close()
+            moveTo(12f, 7f)
+            curveTo(9.24f, 7f, 7f, 9.24f, 7f, 12f)
+            curveTo(7f, 14.76f, 9.24f, 17f, 12f, 17f)
+            curveTo(14.76f, 17f, 17f, 14.76f, 17f, 12f)
+            curveTo(17f, 9.24f, 14.76f, 7f, 12f, 7f)
+            close()
+        }.build()
+    }
+
+    // NEW: Native Share Action Paper Airplane Vector Path Configuration
+    val instagramShareIcon = remember {
+        androidx.compose.ui.graphics.vector.ImageVector.Builder(
+            name = "InstagramShareIcon",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).path(
+            stroke = androidx.compose.ui.graphics.SolidColor(Color.White),
+            strokeLineWidth = 2f,
+            strokeLineCap = androidx.compose.ui.graphics.StrokeCap.Round,
+            strokeLineJoin = androidx.compose.ui.graphics.StrokeJoin.Round
+        ) {
+            moveTo(22f, 2f)
+            lineTo(11f, 13f)
+            moveTo(22f, 2f)
+            lineTo(15f, 22f)
+            lineTo(11f, 13f)
+            lineTo(2f, 9f)
+            close()
+        }.build()
+    }
+
+// UPDATED: Intent Handlers using the shortcode conversion engine
+    val openInstagramAction = { reelId: String ->
+        if (reelId.isNotEmpty()) {
+            try {
+                val shortcode = convertNumericIdToShortcode(reelId)
+                val uri = Uri.parse("https://www.instagram.com/reel/$shortcode/")
+                val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                    setPackage("com.instagram.android")
+                }
+                try {
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Cannot launch path: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val shareReelAction = { reelId: String ->
+        if (reelId.isNotEmpty()) {
+            try {
+                val shortcode = convertNumericIdToShortcode(reelId)
+                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, "https://www.instagram.com/reel/$shortcode/")
+                }
+                context.startActivity(Intent.createChooser(shareIntent, "Share Reel"))
+            } catch (e: Exception) {
+                Toast.makeText(context, "Share broken: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val openProfileAction = { username: String ->
+        val handle = username.removePrefix("@")
+        if (handle.isNotEmpty() && handle != "user") {
+            try {
+                val uri = Uri.parse("https://www.instagram.com/$handle/")
+                val intent = Intent(Intent.ACTION_VIEW, uri).apply {
+                    setPackage("com.instagram.android")
+                }
+                try {
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, uri))
+                }
+            } catch (e: Exception) {
+                Toast.makeText(context, "Cannot launch profile: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     val toggleLikeAction = {
         if (currentReelId.isNotEmpty()) {
             try {
@@ -237,7 +388,7 @@ val playerPool = remember(context) {
                 if (fileToSave.exists()) {
                     fileToSave.copyTo(destination, overwrite = true)
                     isCurrentVideoSaved = true
-                    Toast.makeText(context, "Copied to Download/InstaSaved", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "Copied to Download/InstaSaved ", Toast.LENGTH_SHORT).show()
                     
                     android.media.MediaScannerConnection.scanFile(
                         context,
@@ -251,11 +402,12 @@ val playerPool = remember(context) {
             Toast.makeText(context, "Folder Save Error: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
-DisposableEffect(Unit) {
-    onDispose {
-        playerPool.forEach { it.release() }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            playerPool.forEach { it.release() }
+        }
     }
-}
 
     LaunchedEffect(pagerState.currentPage) {
         if (videoFiles.isNotEmpty()) {
@@ -270,57 +422,57 @@ DisposableEffect(Unit) {
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "No reels found inside storage folder.\nRun script via Termux!",
+                    text = "No reels found.\nRun script via Termux!",
                     style = MaterialTheme.typography.bodyLarge,
                     color = Color.Gray
                 )
             }
         } else {
             LaunchedEffect(pagerState.currentPage, videoFiles, refreshTrigger) {
-    if (videoFiles.isNotEmpty()) {
-        val currentIdx = pagerState.currentPage
-        playerPool.forEach { it.pause() }
+                if (videoFiles.isNotEmpty()) {
+                    val currentIdx = pagerState.currentPage
+                    playerPool.forEach { it.pause() }
 
-        if (currentIdx < videoFiles.size) {
-            val currentPlayer = playerPool[currentIdx % 3]
-            val activeFile = videoFiles[currentIdx]
-            
-            if (currentPlayer.currentMediaItem?.localConfiguration?.uri?.path != activeFile.absolutePath) {
-                currentPlayer.setMediaItem(MediaItem.fromUri(activeFile.absolutePath))
-                currentPlayer.prepare()
-            }
-            currentPlayer.playWhenReady = true
-        }
+                    if (currentIdx < videoFiles.size) {
+                        val currentPlayer = playerPool[currentIdx % 3]
+                        val activeFile = videoFiles[currentIdx]
+                        
+                        if (currentPlayer.currentMediaItem?.localConfiguration?.uri?.path != activeFile.absolutePath) {
+                            currentPlayer.setMediaItem(MediaItem.fromUri(activeFile.absolutePath))
+                            currentPlayer.prepare()
+                        }
+                        currentPlayer.playWhenReady = true
+                    }
 
-        val nextIdx = currentIdx + 1
-        if (nextIdx < videoFiles.size) {
-            val nextPlayer = playerPool[nextIdx % 3]
-            val nextFile = videoFiles[nextIdx]
-            
-            if (nextPlayer.currentMediaItem?.localConfiguration?.uri?.path != nextFile.absolutePath) {
-                nextPlayer.stop()
-                nextPlayer.clearMediaItems()
-                nextPlayer.setMediaItem(MediaItem.fromUri(nextFile.absolutePath))
-                nextPlayer.prepare()
-            }
-            nextPlayer.playWhenReady = false
-        }
+                    val nextIdx = currentIdx + 1
+                    if (nextIdx < videoFiles.size) {
+                        val nextPlayer = playerPool[nextIdx % 3]
+                        val nextFile = videoFiles[nextIdx]
+                        
+                        if (nextPlayer.currentMediaItem?.localConfiguration?.uri?.path != nextFile.absolutePath) {
+                            nextPlayer.stop()
+                            nextPlayer.clearMediaItems()
+                            nextPlayer.setMediaItem(MediaItem.fromUri(nextFile.absolutePath))
+                            nextPlayer.prepare()
+                        }
+                        nextPlayer.playWhenReady = false
+                    }
 
-        val prevIdx = currentIdx - 1
-        if (prevIdx >= 0 && prevIdx < videoFiles.size) {
-            val prevPlayer = playerPool[prevIdx % 3]
-            val prevFile = videoFiles[prevIdx]
-            
-            if (prevPlayer.currentMediaItem?.localConfiguration?.uri?.path != prevFile.absolutePath) {
-                prevPlayer.stop()
-                prevPlayer.clearMediaItems()
-                prevPlayer.setMediaItem(MediaItem.fromUri(prevFile.absolutePath))
-                prevPlayer.prepare()
+                    val prevIdx = currentIdx - 1
+                    if (prevIdx >= 0 && prevIdx < videoFiles.size) {
+                        val prevPlayer = playerPool[prevIdx % 3]
+                        val prevFile = videoFiles[prevIdx]
+                        
+                        if (prevPlayer.currentMediaItem?.localConfiguration?.uri?.path != prevFile.absolutePath) {
+                            prevPlayer.stop()
+                            prevPlayer.clearMediaItems()
+                            prevPlayer.setMediaItem(MediaItem.fromUri(prevFile.absolutePath))
+                            prevPlayer.prepare()
+                        }
+                        prevPlayer.playWhenReady = false
+                    }
+                }
             }
-            prevPlayer.playWhenReady = false
-        }
-    }
-}
 
             VerticalPager(
                 state = pagerState,
@@ -328,22 +480,77 @@ DisposableEffect(Unit) {
             ) { page ->
                 val loopVideoFile = videoFiles.getOrNull(page)
                 
-                val loopCaptionText = remember(loopVideoFile) {
+                val instagramMetadata = remember(loopVideoFile) {
                     if (loopVideoFile != null) {
-                        val captionFile = File(loopVideoFile.parentFile, "${loopVideoFile.nameWithoutExtension}.txt")
-                        if (captionFile.exists()) {
-                            try { captionFile.readText() } catch (e: Exception) { "" }
-                        } else ""
-                    } else ""
+                        val jsonFile = File(loopVideoFile.parentFile, "${loopVideoFile.nameWithoutExtension}_metadata.json")
+                        if (jsonFile.exists()) {
+                            try {
+                                org.json.JSONObject(jsonFile.readText())
+                            } catch (e: Exception) {
+                                null
+                            }
+                        } else null
+                    } else null
                 }
 
-                val loopUsernameText = remember(loopVideoFile) {
-                    if (loopVideoFile != null) {
-                        val userFile = File(loopVideoFile.parentFile, "${loopVideoFile.nameWithoutExtension}_user.txt")
-                        if (userFile.exists()) {
-                            try { userFile.readText() } catch (e: Exception) { "@user" }
-                        } else "@user"
-                    } else "@user"
+                val loopCaptionText = remember(instagramMetadata) {
+                    try {
+                        instagramMetadata?.optJSONObject("caption")?.optString("text") ?: ""
+                    } catch (e: Exception) {
+                        ""
+                    }
+                }
+
+                val loopUsernameText = remember(instagramMetadata) {
+                    try {
+                        instagramMetadata?.optJSONObject("user")?.optString("username") ?: "@user"
+                    } catch (e: Exception) {
+                        "@user"
+                    }
+                }
+
+                val loopIsVerified = remember(instagramMetadata) {
+                    try {
+                        instagramMetadata?.optJSONObject("user")?.optBoolean("is_verified", false) ?: false
+                    } catch (e: Exception) { false }
+                }
+
+                val loopLikeCountText = remember(instagramMetadata) {
+                    try {
+                        val likes = instagramMetadata?.optInt("like_count", -1) ?: -1
+                        if (likes >= 0) formatMetricCount(likes) else ""
+                    } catch (e: Exception) { "" }
+                }
+
+                val loopViewCountText = remember(instagramMetadata) {
+                    try {
+                        val views = instagramMetadata?.optInt("play_count", -1)?.takeIf { it >= 0 }
+                            ?: instagramMetadata?.optInt("view_count", -1)?.takeIf { it >= 0 }
+                            ?: instagramMetadata?.optJSONObject("clips_metadata")?.optInt("play_count", -1) ?: -1
+                        
+                        if (views >= 0) formatMetricCount(views) else ""
+                    } catch (e: Exception) { "" }
+                }
+
+                val loopAudioTrackText = remember(instagramMetadata) {
+                    try {
+                        val clipsMetadata = instagramMetadata?.optJSONObject("clips_metadata")
+                        val musicInfo = clipsMetadata?.optJSONObject("music_info")?.optJSONObject("music_asset_info")
+                            ?: instagramMetadata?.optJSONObject("audio_info")
+                        
+                        if (musicInfo != null) {
+                            val title = musicInfo.optString("title", "")
+                            val artist = musicInfo.optString("display_artist", "") ?: musicInfo.optString("artist_name", "")
+                            if (title.isNotEmpty()) "$title • $artist" else ""
+                        } else {
+                            val originalSoundInfo = clipsMetadata?.optJSONObject("original_sound_info")
+                            if (originalSoundInfo != null) {
+                                val title = originalSoundInfo.optString("original_audio_title", "Original audio")
+                                val artist = originalSoundInfo.optJSONObject("ig_artist")?.optString("username", "") ?: ""
+                                if (artist.isNotEmpty()) "$title • $artist" else title
+                            } else ""
+                        }
+                    } catch (e: Exception) { "" }
                 }
 
                 val loopPfpBitmap = remember(loopVideoFile) {
@@ -357,36 +564,78 @@ DisposableEffect(Unit) {
                     } else null
                 }
 
-                Box(modifier = Modifier.fillMaxSize()) {
-   SharedPlayerItemSurface(
-    exoPlayer = playerPool[page % 3],
-    isCurrentPage = pagerState.currentPage == page,
-    onDoubleTapTriggered = {
-        forceLikeAction()
-    }
-)
+                val loopReelId = remember(loopVideoFile) {
+                    loopVideoFile?.nameWithoutExtension?.substringAfter("reel_") ?: ""
+                }
 
-                    // CAPTION OVERLAY BOX
+                val loopSongBitmap = remember(loopVideoFile, loopReelId) {
+                    if (loopVideoFile != null) {
+                        val parentDir = loopVideoFile.parentFile
+                        val reelFolder = File(parentDir, ".reel")
+                        val baseName = loopVideoFile.nameWithoutExtension
+
+                        val candidateFiles = listOf(
+                            File(reelFolder, "${baseName}_song.jpg"),  
+                            File(parentDir, "${baseName}_song.jpg"),  
+                            File(reelFolder, "${loopReelId}_song.jpg"), 
+                            File(parentDir, "${loopReelId}_song.jpg")  
+                        )
+
+                        val matchedFile = candidateFiles.firstOrNull { it.exists() }
+                        if (matchedFile != null) {
+                            try {
+                                BitmapFactory.decodeFile(matchedFile.absolutePath)?.asImageBitmap()
+                            } catch (e: Exception) { null }
+                        } else null
+                    } else null
+                }
+                
+                val isOriginalAudio = remember(instagramMetadata) {
+    try {
+        val clipsMetadata = instagramMetadata?.optJSONObject("clips_metadata")
+        val hasMusicInfo = clipsMetadata?.optJSONObject("music_info")?.optJSONObject("music_asset_info") != null 
+                || instagramMetadata?.optJSONObject("audio_info") != null
+        val hasOriginalSound = clipsMetadata?.optJSONObject("original_sound_info") != null
+        !hasMusicInfo && hasOriginalSound
+    } catch (e: Exception) {
+        false
+    }
+}
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    SharedPlayerItemSurface(
+                        exoPlayer = playerPool[page % 3],
+                        isCurrentPage = pagerState.currentPage == page,
+                        onDoubleTapTriggered = {
+                            forceLikeAction()
+                        }
+                    )
+
+                    // ==========================================
+                    // 1. CAPTION OVERLAY BOX (BOTTOM START)
+                    // ==========================================
                     if (loopCaptionText.isNotEmpty() || loopUsernameText != "@user") {
                         var isExpanded by remember { mutableStateOf(false) }
+                        var showProfilePrompt by remember { mutableStateOf(false) }
                         val captionScrollState = rememberScrollState()
 
                         LaunchedEffect(pagerState.currentPage == page) {
                             if (pagerState.currentPage != page) {
                                 isExpanded = false
+                                showProfilePrompt = false
                                 captionScrollState.scrollTo(0)
                             }
                         }
 
                         Box(
                             modifier = Modifier
-                                .fillMaxWidth(0.78f)
+                                .fillMaxWidth(0.75f) 
                                 .align(Alignment.BottomStart)
                                 .padding(start = 20.dp, end = 16.dp, bottom = 64.dp)
                                 .background(
                                     color = if (isExpanded) Color.Black.copy(alpha = 0.58f) else Color.Transparent,
                                     shape = RoundedCornerShape(8.dp)
-                                ) 
+                               ) 
                                 .clickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null 
@@ -396,9 +645,12 @@ DisposableEffect(Unit) {
                                 .padding(10.dp)
                         ) {
                             Column(modifier = Modifier.fillMaxWidth()) {
+                                // Clickable Row for Account Target
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(bottom = 8.dp)
+                                    modifier = Modifier
+                                        .padding(bottom = 6.dp)
+                                        .clickable { showProfilePrompt = !showProfilePrompt }
                                 ) {
                                     if (loopPfpBitmap != null) {
                                         Image(
@@ -428,6 +680,39 @@ DisposableEffect(Unit) {
                                         fontWeight = FontWeight.Bold,
                                         style = MaterialTheme.typography.bodyMedium
                                     )
+
+                                    if (loopIsVerified) {
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Star,
+                                            contentDescription = "Verified Badge",
+                                            tint = Color(0xFF3897F0), 
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+
+                                // NEW: "check profile?" Micro-Translucent Instagram Style Banner Overlay block
+                                AnimatedVisibility(
+                                    visible = showProfilePrompt,
+                                    enter = fadeIn() + expandVertically(),
+                                    exit = fadeOut() + shrinkVertically()
+                                ) {
+                                    Text(
+                                        text = "Check Profile",
+                                        color = Color.White.copy(alpha = 0.9f),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier
+                                            .padding(bottom = 8.dp, start = 2.dp)
+                                            .background(Color.White.copy(alpha = 0.2f), shape = RoundedCornerShape(4.dp))
+                                            .clickable {
+                                                openProfileAction(loopUsernameText)
+                                                showProfilePrompt = false
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
                                 }
 
                                 var totalLinesCount by remember(loopCaptionText) { mutableIntStateOf(1) }
@@ -438,60 +723,152 @@ DisposableEffect(Unit) {
                                     fontSize = 13.sp,
                                     style = MaterialTheme.typography.bodyMedium,
                                     maxLines = if (isExpanded) Int.MAX_VALUE else 1, 
-                                    overflow = if (isExpanded) {
-                                        TextOverflow.Clip
-                                    } else {
-                                        if (totalLinesCount > 1) TextOverflow.Ellipsis else TextOverflow.Clip
-                                    },
+                                    overflow = if (isExpanded) TextOverflow.Clip else if (totalLinesCount > 1) TextOverflow.Ellipsis else TextOverflow.Clip,
                                     onTextLayout = { textLayoutResult ->
                                         totalLinesCount = textLayoutResult.lineCount
                                     },
                                     modifier = if (isExpanded) {
                                         Modifier
-                                            .heightIn(max = 220.dp)
+                                            .heightIn(max = 180.dp)
                                             .verticalScroll(captionScrollState)
                                     } else {
                                         Modifier
                                     }
                                 )
+
+                                if (loopViewCountText.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.alpha(0.85f)
+                                    ) {
+                                        Text(
+                                            text = "$loopViewCountText views",
+                                            color = Color.White,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
 
+                    // ==========================================
+                    // 2. ENGAGEMENT ACTIONS SIDEBAR (BOTTOM END)
+                    // ==========================================
+                    // UPDATED: Shifted bottom padding safely up to 260.dp to compensate vertically for extra button layout modules
                     Column(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .padding(end = 16.dp, bottom = 160.dp), 
-                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                            .padding(end = 16.dp, bottom = 260.dp), 
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
+                        // Like Metric Unit Block
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            IconButton(
+                                onClick = { toggleLikeAction() },
+                                colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Transparent),
+                                modifier = Modifier.size(44.dp)
+                            ) {
+                                Icon(
+                                    imageVector = instagramHeartIcon,
+                                    contentDescription = "Like Toggle",
+                                    tint = Color.Unspecified, 
+                                    modifier = Modifier.size(32.dp) 
+                                )
+                            }
+                            if (loopLikeCountText.isNotEmpty()) {
+                                Text(
+                                    text = loopLikeCountText,
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(top = 0.dp)
+                                )
+                            }
+                        }
+
+                        // Save Action Unit Block
                         IconButton(
-                            onClick = { toggleLikeAction() },
+                            onClick = { if (loopVideoFile != null) toggleSaveAction(loopVideoFile) },
                             colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Transparent),
-                            modifier = Modifier.size(52.dp) 
+                            modifier = Modifier.size(44.dp)
                         ) {
                             Icon(
-                                imageVector = instagramHeartIcon,
-                                contentDescription = "Instagram Like Sync Toggle",
+                                imageVector = instagramSaveIcon,
+                                contentDescription = "Save Toggle",
                                 tint = Color.Unspecified, 
-                                modifier = Modifier.size(32.dp) 
+                                modifier = Modifier.size(30.dp) 
+                            )
+                        }
+
+                        // NEW: Open in Instagram Deep Link Execution Component Module
+                        IconButton(
+                            onClick = { if (loopReelId.isNotEmpty()) openInstagramAction(loopReelId) },
+                            colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Transparent),
+                            modifier = Modifier.size(44.dp)
+                        ) {
+                            Icon(
+                                imageVector = instagramAppIcon,
+                                contentDescription = "Open in Instagram App",
+                                tint = Color.Unspecified, 
+                                modifier = Modifier.size(30.dp) 
                             )
                         }
 
                         IconButton(
-                            onClick = {
-                                if (loopVideoFile != null) {
-                                    toggleSaveAction(loopVideoFile)
-                                }
-                            },
+                            onClick = { if (loopReelId.isNotEmpty()) shareReelAction(loopReelId) },
                             colors = IconButtonDefaults.iconButtonColors(containerColor = Color.Transparent),
-                            modifier = Modifier.size(52.dp) 
+                            modifier = Modifier.size(44.dp)
                         ) {
                             Icon(
-                                imageVector = instagramSaveIcon,
-                                contentDescription = "Save Reel To Folder Toggle",
+                                imageVector = instagramShareIcon,
+                                contentDescription = "Share Link Outward",
                                 tint = Color.Unspecified, 
                                 modifier = Modifier.size(30.dp) 
+                            )
+                        }
+                    }
+
+                    // ==========================================
+                    // 3. SQUARE MUSIC INFO WITH PICTURE (BOTTOM END)
+                    // ==========================================
+                    if (loopAudioTrackText.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .padding(end = 16.dp, bottom = 64.dp)
+                                .width(72.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            val audioImageBitmap = if (isOriginalAudio) (loopPfpBitmap ?: loopSongBitmap) else loopSongBitmap
+
+if (audioImageBitmap != null) {
+    Image(
+        bitmap = audioImageBitmap,
+        contentDescription = "Song Album Art",
+        contentScale = ContentScale.Crop,
+        modifier = Modifier
+            .size(40.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(Color.DarkGray)
+    )
+}
+                            
+                            Spacer(modifier = Modifier.height(4.dp))
+                            
+                            Text(
+                                text = loopAudioTrackText,
+                                color = Color.White,
+                                fontSize = 10.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.fillMaxWidth(),
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
                             )
                         }
                     }
@@ -499,6 +876,7 @@ DisposableEffect(Unit) {
             }
         }
 
+        // Persistent Headbar Overlays
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -569,10 +947,11 @@ DisposableEffect(Unit) {
             }
         }
 
+        // Engine Action Deployment Pillar
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(end = 16.dp, bottom = 82.dp) 
+                .padding(end = 16.dp, bottom = 165.dp) 
                 .navigationBarsPadding(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -611,7 +990,7 @@ DisposableEffect(Unit) {
             }
         }
 
-if (showDialog) {
+        if (showDialog) {
             AlertDialog(
                 onDismissRequest = { showDialog = false },
                 title = { Text("Purge Cache?") },
@@ -681,7 +1060,6 @@ fun SharedPlayerItemSurface(
     var isUserDraggingProgress by remember { mutableStateOf(false) }
     var displaysHeartOverlay by remember { mutableStateOf(false) }
 
-    // Keep shouldBePlaying synced if the page changes
     LaunchedEffect(isCurrentPage) {
         if (!isCurrentPage) {
             shouldBePlaying = true 
@@ -717,7 +1095,7 @@ fun SharedPlayerItemSurface(
                         exoPlayer.pause() 
                     }
                     Lifecycle.Event.ON_RESUME -> { 
-                        exoPlayer.seekTo(exoPlayer.currentPosition)
+                        // Clean wake restoration: play directly without causing main-thread pipeline reinitialization
                         if (shouldBePlaying) {
                             exoPlayer.play()
                         }
@@ -740,10 +1118,17 @@ fun SharedPlayerItemSurface(
                     setBackgroundColor(android.graphics.Color.BLACK)
                 }
             },
-            update = { playerView -> playerView.player = exoPlayer },
+            update = { playerView -> 
+                // Only touch the layout binding if the container instance tracking mismatched
+                if (playerView.player != exoPlayer) {
+                    playerView.player = exoPlayer
+                }
+            },
+            onRelease = { playerView ->
+                playerView.player = null 
+            },
             modifier = Modifier
                 .fillMaxSize()
-                // FIX: Changed 'Unit' to 'isCurrentPage' and 'exoPlayer' keys to prevent stale lambdas
                 .pointerInput(isCurrentPage, exoPlayer) {
                     detectTapGestures(
                         onTap = {
@@ -803,7 +1188,7 @@ fun SharedPlayerItemSurface(
                                 exoPlayer.seekTo(computedSeekMs)
                                 isUserDraggingProgress = false
                             },
-                            onDragCancel = { isUserDraggingProgress = false },
+                            onDragCancel = { isUserDraggingProgress = false }, // Safeguard handle state
                             onDrag = { change, dragAmount ->
                                 change.consume()
                                 val layoutWidth = size.width.toFloat()
