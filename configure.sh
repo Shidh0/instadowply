@@ -77,9 +77,11 @@ BASHRC_EOF
 # --- Insta-Bulk-Grabber Automation ---
 clear
 echo "----Starting downloads----"
+sleep 1
 node insta-bulk-grabber/android_grabber.js&
 NODE_PID=$!
 wait $NODE_PID
+sleep 0.5
 exit
 # BASHRC_END
 BASHRC_EOF
