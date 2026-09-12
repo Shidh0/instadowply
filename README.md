@@ -42,6 +42,7 @@ or
 
 In Termux run these commands
 ```bash
+pkg install curl
 curl -o setup_grabber.sh https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/setup_grabber.sh
 chmod +x ~/setup_grabber.sh
 ~/setup_grabber.sh
