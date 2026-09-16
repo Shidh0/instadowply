@@ -6,7 +6,6 @@ echo "============================================="
 
 # 1. Update and install repository extensions
 echo "Updating packages and setting up additional repos..."
-pkg update && pkg upgrade -y
 pkg install nodejs python x11-repo tur-repo curl -y
 
 # 2. Install all system dependencies and Chromium (Corrected for Termux)
