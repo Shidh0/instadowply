@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -433,6 +433,17 @@ namespace InstaDowplyWin
         }
 
         private void Refresh_Click(object sender, RoutedEventArgs e) => LoadVideoDirectory();
+private void Window_StateChanged(object sender, EventArgs e)
+{
+    if (WindowState == WindowState.Maximized)
+    {
+        WindowStyle = WindowStyle.None;
+    }
+    else
+    {
+        WindowStyle = WindowStyle.SingleBorderWindow;
+    }
+}
 
         // ================= UTILITIES =================
 
