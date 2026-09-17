@@ -6,7 +6,8 @@ echo "============================================="
 
 # 1. Update and install repository extensions
 echo "Downloading dependencies..."
-pkg install nodejs x11-repo tur-repo curl freetype fontconfig chromium libcairo libpango libxi libxtst libxcomposite libxdamage alsa-lib -y
+pkg install nodejs x11-repo tur-repo curl -y
+pkg install freetype fontconfig chromium libcairo libpango libxi libxtst libxcomposite libxdamage alsa-lib -y
 
 # 3. Request storage access if not already granted
 echo "Requesting storage permissions..."
