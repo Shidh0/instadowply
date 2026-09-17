@@ -1,7 +1,7 @@
 {
   "name": "insta-bulk-grabber",
   "version": "1.4.0",
-  "description": "Instagram Bulk Reels Grabber Script",
+  "description": "Instagram Bulk Reels Grabber Script (Windows)",
   "main": "windows_grabber.js",
   "scripts": {
     "setup": "npm install && npx playwright install chromium",
