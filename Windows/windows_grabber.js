@@ -4,7 +4,7 @@
 process.on('unhandledRejection', (reason) => {
     if (reason?.message?.includes('Timeout') || reason?.message?.includes('status code')) return;
     if (reason?.message?.includes('Target page snapped') || reason?.message?.includes('context mapping')) return;
-    console.log('💡 Intercepted background stream exception:', reason?.message || reason);
+    console.log('?? Intercepted background stream exception:', reason?.message || reason);
 });
 
 const { chromium } = require('playwright');
@@ -25,18 +25,18 @@ const LOCK_FILE_PATH = path.join(DOWNLOAD_FOLDER, 'download.lock');
 // GRACEFUL SHUTDOWN INTERCEPTOR (Ctrl+C Cleanup & Backlog State Save)
 // ============================================================================
 const cleanupAndExit = () => {
-    console.log('\n🛑 Script interrupted via Ctrl+C. Initiating structural cache dump...');
+    console.log('\n?? Script interrupted via Ctrl+C. Initiating structural cache dump...');
     try {
         if (downloadQueue.length > 0) {
             fs.writeFileSync(QUEUE_BACKLOG_FILE, JSON.stringify(downloadQueue, null, 2), 'utf8');
-            console.log(`💾 Saved ${downloadQueue.length} pending items from memory stream to queue_backlog.json.`);
+            console.log(`?? Saved ${downloadQueue.length} pending items from memory stream to queue_backlog.json.`);
         }
         if (fs.existsSync(LOCK_FILE_PATH)) {
             fs.unlinkSync(LOCK_FILE_PATH);
-            console.log('🗑️ download.lock successfully removed from hidden .Reels folder.');
+            console.log('??? download.lock successfully removed from hidden .Reels folder.');
         }
     } catch (e) {
-        console.log('⚠️ Could not complete cleanup cycle during shutdown:', e.message);
+        console.log('?? Could not complete cleanup cycle during shutdown:', e.message);
     }
     process.exit(0);
 };
@@ -44,7 +44,7 @@ const cleanupAndExit = () => {
 process.on('SIGINT', cleanupAndExit);
 process.on('SIGTERM', cleanupAndExit);
 
-const TARGET_DOWNLOAD_COUNT = 200;
+const TARGET_DOWNLOAD_COUNT = 130;
 const MAX_HISTORY_SIZE = 15000;
 const MAX_CONCURRENT_DOWNLOADS = 3;
 
@@ -56,9 +56,9 @@ let downloadedVideoIds = [];
 if (fs.existsSync(HISTORY_FILE)) {
     try {
         downloadedVideoIds = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
-        console.log(`📦 Loaded ${downloadedVideoIds.length} historical Reel IDs from history.json`);
+        console.log(`?? Loaded ${downloadedVideoIds.length} historical Reel IDs from history.json`);
     } catch (e) {
-        console.log('⚠️ History log corrupted, initializing fresh array.');
+        console.log('?? History log corrupted, initializing fresh array.');
         downloadedVideoIds = [];
     }
 }
@@ -67,10 +67,10 @@ let downloadQueue = [];
 if (fs.existsSync(QUEUE_BACKLOG_FILE)) {
     try {
         downloadQueue = JSON.parse(fs.readFileSync(QUEUE_BACKLOG_FILE, 'utf8'));
-        console.log(`📥 Successfully restored ${downloadQueue.length} unfinished targets from queue_backlog.json`);
+        console.log(`?? Successfully restored ${downloadQueue.length} unfinished targets from queue_backlog.json`);
         fs.unlinkSync(QUEUE_BACKLOG_FILE); 
     } catch (e) {
-        console.log('⚠️ Queue backlog state corrupted, cleaning execution context.');
+        console.log('?? Queue backlog state corrupted, cleaning execution context.');
         downloadQueue = [];
     }
 }
@@ -84,7 +84,7 @@ function saveToHistory(videoId) {
     if (downloadedVideoIds.length > MAX_HISTORY_SIZE) {
         const itemsToRemove = downloadedVideoIds.length - MAX_HISTORY_SIZE;
         downloadedVideoIds.splice(0, itemsToRemove);
-        console.log(`\n🧹 History limit reached. Purged ${itemsToRemove} oldest entries from log.`);
+        console.log(`\n?? History limit reached. Purged ${itemsToRemove} oldest entries from log.`);
     }
     fs.writeFileSync(HISTORY_FILE, JSON.stringify(downloadedVideoIds, null, 2), 'utf8');
 }
@@ -103,7 +103,7 @@ async function processPlayerLikes(page) {
 
         if (!Array.isArray(pendingIds) || pendingIds.length === 0) return;
 
-        console.log(`\n❤️ Found ${pendingIds.length} pending Likes to process...`);
+        console.log(`\n?? Found ${pendingIds.length} pending Likes to process...`);
 
         for (const id of pendingIds) {
             let targetShortcode = id;
@@ -169,7 +169,7 @@ async function processPlayerLikes(page) {
                 }).catch(() => ({ liked: false }));
 
                 if (currentStatus.liked) {
-                    console.log(`     ℹ️ Reel is already liked. Skipping entry adjustment.`);
+                    console.log(`     ?? Reel is already liked. Skipping entry adjustment.`);
                     continue;
                 }
 
@@ -226,7 +226,7 @@ async function processPlayerLikes(page) {
                 }).catch(() => false);
 
                 if (likeDispatched) {
-                    console.log(`     ✅ Complete Event Dispatch Matrix injected into Like element layers.`);
+                    console.log(`     ? Complete Event Dispatch Matrix injected into Like element layers.`);
                 } else {
                     const heartBtn = await page.$('button:has(svg[aria-label="Like"]), svg[aria-label="Like"], [aria-label="Like"]').catch(() => null);
                     if (heartBtn) {
@@ -236,7 +236,7 @@ async function processPlayerLikes(page) {
                             const nativeJitterY = (box.y + box.height / 2) + (Math.floor(Math.random() * 7) - 3);
                             
                             await page.touchscreen.tap(nativeJitterX, nativeJitterY);
-                            console.log(`     ✅ Playwright Native Jittered Touchscreen Tap Fallback deployed.`);
+                            console.log(`     ? Playwright Native Jittered Touchscreen Tap Fallback deployed.`);
                         }
                     }
                 }
@@ -244,14 +244,14 @@ async function processPlayerLikes(page) {
                 const postLikeDelay = Math.floor(Math.random() * 3000) + 3000; 
                 await page.waitForTimeout(postLikeDelay);
             } catch (err) {
-                console.log(`     ❌ Link unavailable or skipped: ${err.message}`);
+                console.log(`     ? Link unavailable or skipped: ${err.message}`);
             }
         }
 
         fs.writeFileSync(LIKES_FILE, JSON.stringify([]), 'utf8');
         await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
     } catch (e) {
-        console.log('⚠️ Notice processing sync pipeline:', e.message);
+        console.log('?? Notice processing sync pipeline:', e.message);
     }
 }
 
@@ -362,11 +362,11 @@ async function processDownloadQueue() {
         executeIndividualDownload(nextTask).then((status) => {
             activeDownloads--;
             if (status === true) {
-                console.log(` ✅ [SAVED] Progress: ${downloadCount}/${TARGET_DOWNLOAD_COUNT} files. (Queue size: ${downloadQueue.length})`);
+                console.log(` ? [SAVED] Progress: ${downloadCount}/${TARGET_DOWNLOAD_COUNT} files. (Queue size: ${downloadQueue.length})`);
             } else if (status === 'EXPIRED') {
-                console.log(` ❌ [EXPIRED] Link for Reel ${nextTask.id} has expired. Dropping from backlog permanently.`);
+                console.log(` ? [EXPIRED] Link for Reel ${nextTask.id} has expired. Dropping from backlog permanently.`);
             } else {
-                console.log(` ♻️ [RE-QUEUE] Network drop for ${nextTask.id}. Retrying later.`);
+                console.log(` ?? [RE-QUEUE] Network drop for ${nextTask.id}. Retrying later.`);
                 setTimeout(() => {
                     downloadQueue.push(nextTask);
                 }, 1500);
@@ -428,7 +428,7 @@ async function dismissLoginPopup(page) {
         const lowerText = bodyText.toLowerCase();
 
         if (lowerText.includes("save your login info") || lowerText.includes("save info")) {
-            console.log('🚨 [INTERCEPT] "Save your login info?" overlay detected on viewport.');
+            console.log('?? [INTERCEPT] "Save your login info?" overlay detected on viewport.');
 
             const targetBtn = page.locator('button, [role="button"], div, span').filter({ hasText: /^Not now$/i }).first();
             if (await targetBtn.isVisible()) {
@@ -524,14 +524,14 @@ async function dismissLoginPopup(page) {
             timeout: 60000
         });
     } catch (gotoError) {
-        console.log('⚠️ Navigation warning:', gotoError.message);
+        console.log('?? Navigation warning:', gotoError.message);
     }
     
     const finalUrl = page.url();
     console.log(`Verified Browser Location: ${finalUrl}`);
 
     if (!finalUrl.includes('/reels/')) {
-        console.error('❌ CRITICAL: Session cookies likely expired or invalid.');
+        console.error('? CRITICAL: Session cookies likely expired or invalid.');
         await browser.close();
         process.exit(1);
     }
@@ -551,7 +551,7 @@ async function dismissLoginPopup(page) {
 
     while (downloadCount < TARGET_DOWNLOAD_COUNT) {
         if (Date.now() - lastSuccessTime > 25000) {
-            console.log('⚠️ [STUCK DETECTED] No media progress in 25s. Running soft pipeline recovery...');
+            console.log('?? [STUCK DETECTED] No media progress in 25s. Running soft pipeline recovery...');
             try {
                 await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
                 lastSuccessTime = Date.now(); 
@@ -565,7 +565,7 @@ async function dismissLoginPopup(page) {
         await dismissLoginPopup(page);
         
         if (downloadQueue.length > 20) { 
-            console.log(`\n🛑 [QUEUE BACKLOG DETECTED] Backlog size: ${downloadQueue.length}. Freezing media play states...`);
+            console.log(`\n?? [QUEUE BACKLOG DETECTED] Backlog size: ${downloadQueue.length}. Freezing media play states...`);
             
             await page.evaluate(() => {
                 const currentVideo = document.querySelector('video');
@@ -578,7 +578,7 @@ async function dismissLoginPopup(page) {
                 await page.waitForTimeout(1000);
             }
 
-            console.log('▶️ [BACKLOG RESOLVED] Resuming stream playback...\n');
+            console.log('?? [BACKLOG RESOLVED] Resuming stream playback...\n');
             
             await page.evaluate(() => {
                 const currentVideo = document.querySelector('video');
@@ -620,7 +620,7 @@ async function dismissLoginPopup(page) {
             stuckCounter++;
             
             if (stuckCounter > 2) {
-                console.log('⚠️ [STUCK SEGMENT] Container tracking lost. Re-focusing viewport elements...');
+                console.log('?? [STUCK SEGMENT] Container tracking lost. Re-focusing viewport elements...');
                 try {
                     await page.touchscreen.tap(195, 400);
                     await page.waitForTimeout(400);
@@ -686,7 +686,7 @@ async function dismissLoginPopup(page) {
 
     try { if (fs.existsSync(LOCK_FILE_PATH)) fs.unlinkSync(LOCK_FILE_PATH); } catch(e){}
 
-    console.log(`\n🎉 Success! Processed session cap of ${downloadCount} fresh items into storage.`);
+    console.log(`\n?? Success! Processed session cap of ${downloadCount} fresh items into storage.`);
     await browser.close();
     process.exit(0);
 })();
