@@ -18,7 +18,7 @@ const path = require('path');
 const COOKIES_FILE = path.join(__dirname, 'cookies.json');
 const HISTORY_FILE = path.join(__dirname, 'history.json');
 const QUEUE_BACKLOG_FILE = path.join(__dirname, 'queue_backlog.json'); 
-const DOWNLOAD_FOLDER = path.join(__dirname, '.Reels'); // 📂 Saves to a local .Reels folder on Windows
+const DOWNLOAD_FOLDER = path.join(__dirname, '.Reels');
 const LOCK_FILE_PATH = path.join(DOWNLOAD_FOLDER, 'download.lock');
 
 // ============================================================================
@@ -33,7 +33,7 @@ const cleanupAndExit = () => {
         }
         if (fs.existsSync(LOCK_FILE_PATH)) {
             fs.unlinkSync(LOCK_FILE_PATH);
-            console.log('🗑️ download.lock successfully removed.');
+            console.log('🗑️ download.lock successfully removed from hidden .Reels folder.');
         }
     } catch (e) {
         console.log('⚠️ Could not complete cleanup cycle during shutdown:', e.message);
@@ -41,12 +41,12 @@ const cleanupAndExit = () => {
     process.exit(0);
 };
 
-// Ctrl+C interceptor for Windows Command Prompt / PowerShell
 process.on('SIGINT', cleanupAndExit);
+process.on('SIGTERM', cleanupAndExit);
 
-const TARGET_DOWNLOAD_COUNT = 400;
+const TARGET_DOWNLOAD_COUNT = 200;
 const MAX_HISTORY_SIZE = 15000;
-const MAX_CONCURRENT_DOWNLOADS = 3; 
+const MAX_CONCURRENT_DOWNLOADS = 3;
 
 if (!fs.existsSync(DOWNLOAD_FOLDER)) {
     fs.mkdirSync(DOWNLOAD_FOLDER, { recursive: true });
@@ -90,7 +90,7 @@ function saveToHistory(videoId) {
 }
 
 // ============================================================================
-// LIKE SYNC ENGINE
+// LIKE SYNC ENGINE (Decodes long IDs, kills interstitials & executes click matrix)
 // ============================================================================
 async function processPlayerLikes(page) {
     const LIKES_FILE = path.join(DOWNLOAD_FOLDER, 'pending_likes.json');
@@ -169,7 +169,7 @@ async function processPlayerLikes(page) {
                 }).catch(() => ({ liked: false }));
 
                 if (currentStatus.liked) {
-                    console.log(`     ℹ️ Reel is already liked.`);
+                    console.log(`     ℹ️ Reel is already liked. Skipping entry adjustment.`);
                     continue;
                 }
 
@@ -256,17 +256,24 @@ async function processPlayerLikes(page) {
 }
 
 // ============================================================================
-// CONCURRENT DOWNLOAD WORKER
+// SPEED-OPTIMIZED ASYNC MULTI-SLOT CONCURRENT DOWNLOAD WORKER
 // ============================================================================
 async function executeIndividualDownload(task) {
     const filePath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.mp4`);
-    const captionPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.txt`);
     const pfpPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.jpg`);
-    const userPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_user.txt`);
+    const songPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_song.jpg`);
+    const metadataPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_metadata.json`); 
 
-    if (task.username) {
-        try { fs.writeFileSync(userPath, `@${task.username}`, 'utf8'); } catch(e){}
+    if (task.rawMetadata) {
+        try { 
+            fs.writeFileSync(metadataPath, JSON.stringify(task.rawMetadata, null, 2), 'utf8'); 
+        } catch (e) {}
     }
+
+    const commonHeaders = {
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+    };
 
     if (task.pfpUrl) {
         try {
@@ -274,9 +281,23 @@ async function executeIndividualDownload(task) {
                 method: 'GET',
                 url: task.pfpUrl,
                 responseType: 'arraybuffer',
-                timeout: 10000
+                timeout: 10000,
+                headers: commonHeaders
             });
             fs.writeFileSync(pfpPath, pfpResponse.data);
+        } catch (e) {}
+    }
+
+    if (task.songImgUrl) {
+        try {
+            const songResponse = await axios({
+                method: 'GET',
+                url: task.songImgUrl,
+                responseType: 'arraybuffer',
+                timeout: 10000,
+                headers: commonHeaders
+            });
+            fs.writeFileSync(songPath, songResponse.data);
         } catch (e) {}
     }
 
@@ -287,40 +308,37 @@ async function executeIndividualDownload(task) {
             responseType: 'stream',
             timeout: 20000,
             headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
                 'Accept': '*/*'
             }
         });
 
         const writer = fs.createWriteStream(filePath);
         
-        await new Promise((resolve) => {
+        return await new Promise((resolve) => {
             response.data.pipe(writer);
 
             writer.on('finish', () => {
                 downloadCount++;
                 saveToHistory(task.id); 
-
-                if (task.caption && task.caption.trim().length > 0) {
-                    try {
-                        fs.writeFileSync(captionPath, task.caption, 'utf8');
-                    } catch (e) {}
-                }
-
-                console.log(`  -> [SAVED] Progress: ${downloadCount}/${TARGET_DOWNLOAD_COUNT} files. (Queue size: ${downloadQueue.length})`);
-                resolve();
+                resolve(true); 
             });
 
             const handleFailure = () => {
                 writer.end();
                 try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch(e){}
-                resolve();
+                resolve(false); 
             };
 
             response.data.on('error', handleFailure);
             writer.on('error', handleFailure);
         });
-    } catch (error) {}
+    } catch (error) {
+        if (error.response && (error.response.status === 403 || error.response.status === 410)) {
+            return 'EXPIRED';
+        }
+        return false;
+    }
 }
 
 async function processDownloadQueue() {
@@ -341,10 +359,21 @@ async function processDownloadQueue() {
             fs.writeFileSync(LOCK_FILE_PATH, 'ACTIVE', 'utf8');
         } catch (lockError) {}
 
-        executeIndividualDownload(nextTask).then(() => {
+        executeIndividualDownload(nextTask).then((status) => {
             activeDownloads--;
+            if (status === true) {
+                console.log(` ✅ [SAVED] Progress: ${downloadCount}/${TARGET_DOWNLOAD_COUNT} files. (Queue size: ${downloadQueue.length})`);
+            } else if (status === 'EXPIRED') {
+                console.log(` ❌ [EXPIRED] Link for Reel ${nextTask.id} has expired. Dropping from backlog permanently.`);
+            } else {
+                console.log(` ♻️ [RE-QUEUE] Network drop for ${nextTask.id}. Retrying later.`);
+                setTimeout(() => {
+                    downloadQueue.push(nextTask);
+                }, 1500);
+            }
         }).catch(() => {
             activeDownloads--;
+            downloadQueue.push(nextTask); 
         });
     }
 
@@ -361,12 +390,24 @@ function findVideoUrls(obj, foundLinks = []) {
         const username = obj.user?.username || obj.owner?.username || 'Instagram User';
         const pfpUrl = obj.user?.profile_pic_url || obj.owner?.profile_pic_url || '';
         
+        const songImgUrl = obj.clips_metadata?.music_info?.music_asset_info?.cover_artwork_uri || 
+                           obj.clips_metadata?.music_info?.music_asset_info?.cover_artwork_thumbnail_uri || 
+                           obj.music_info?.music_asset_info?.cover_artwork_uri || '';
+
+        const highestResVideo = obj.video_versions.reduce((max, video) => {
+            const currentArea = (video.width || 0) * (video.height || 0);
+            const maxArea = (max.width || 0) * (max.height || 0);
+            return currentArea > maxArea ? video : max;
+        }, obj.video_versions[0]);
+
         foundLinks.push({ 
-            url: obj.video_versions[0].url, 
+            url: highestResVideo.url, 
             id: id, 
             caption: captionText,
             username: username,
-            pfpUrl: pfpUrl
+            pfpUrl: pfpUrl,
+            songImgUrl: songImgUrl,
+            rawMetadata: obj 
         });
     }
     
@@ -378,19 +419,44 @@ function findVideoUrls(obj, foundLinks = []) {
     return foundLinks;
 }
 
+// ============================================================================
+// NATIVE PLAYWRIGHT INTERCEPTOR
+// ============================================================================
 async function dismissLoginPopup(page) {
     try {
         const bodyText = await page.evaluate(() => document.body.innerText || "").catch(() => "");
         const lowerText = bodyText.toLowerCase();
 
         if (lowerText.includes("save your login info") || lowerText.includes("save info")) {
-            console.log('🚨 [INTERCEPT] "Save your login info?" overlay detected.');
+            console.log('🚨 [INTERCEPT] "Save your login info?" overlay detected on viewport.');
 
             const targetBtn = page.locator('button, [role="button"], div, span').filter({ hasText: /^Not now$/i }).first();
             if (await targetBtn.isVisible()) {
                 await targetBtn.click({ force: true, timeout: 3000 }).catch(() => {});
                 await page.waitForTimeout(1000);
                 return;
+            }
+
+            const looseBtn = page.locator('text=/not now/i').first();
+            if (await looseBtn.isVisible()) {
+                await looseBtn.click({ force: true, timeout: 3000 }).catch(() => {});
+                await page.waitForTimeout(1000);
+                return;
+            }
+
+            const targetCoordinates = await page.evaluate(() => {
+                const elements = Array.from(document.querySelectorAll('button, [role="button"], div, span'));
+                const matched = elements.find(el => el.innerText?.toLowerCase().trim() === 'not now');
+                if (matched) {
+                    const rect = matched.getBoundingClientRect();
+                    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                }
+                return null;
+            }).catch(() => null);
+
+            if (targetCoordinates && targetCoordinates.x > 0 && targetCoordinates.y > 0) {
+                await page.touchscreen.tap(targetCoordinates.x, targetCoordinates.y).catch(() => {});
+                await page.waitForTimeout(1000);
             }
         }
     } catch (e) {}
@@ -402,7 +468,6 @@ async function dismissLoginPopup(page) {
 (async () => {
     console.log('Initializing Windows Native Scraper Pipeline...');
 
-    // Removed hardcoded executablePath so Playwright natively resolves its browser or uses your local Chrome
     const browser = await chromium.launch({
         headless: true,
         args: [
@@ -410,13 +475,12 @@ async function dismissLoginPopup(page) {
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
             '--disable-gpu',
-            '--disable-blink-features=AutomationControlled'
+            '--disable-blink-features=AutomationControlled',
         ]
     });
 
-    // Switched user agent profile securely to a standard desktop Windows device profile 
     const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        userAgent: 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
         viewport: { width: 390, height: 844 },
         isMobile: true,
         hasTouch: true
@@ -428,11 +492,10 @@ async function dismissLoginPopup(page) {
         console.log('Successfully injected authenticated session cookies.');
     } else {
         console.error('CRITICAL ERROR: cookies.json is missing!');
-        process.exit(1);
     }
     
     const page = await context.newPage();
-
+    
     page.on('response', async (response) => {
         const url = response.url();
         const contentType = response.headers()['content-type'] || '';
@@ -458,4 +521,172 @@ async function dismissLoginPopup(page) {
         console.log('Navigating directly to Reels target area...');
         await page.goto('https://www.instagram.com/reels/', {
             waitUntil: 'domcontentloaded',
-      
+            timeout: 60000
+        });
+    } catch (gotoError) {
+        console.log('⚠️ Navigation warning:', gotoError.message);
+    }
+    
+    const finalUrl = page.url();
+    console.log(`Verified Browser Location: ${finalUrl}`);
+
+    if (!finalUrl.includes('/reels/')) {
+        console.error('❌ CRITICAL: Session cookies likely expired or invalid.');
+        await browser.close();
+        process.exit(1);
+    }
+
+    await processPlayerLikes(page);
+
+    await page.waitForTimeout(2000);
+    await dismissLoginPopup(page);
+
+    console.log('Connected to Algorithmic Feed Stream. Beginning automatic crawl loop...');
+
+    processDownloadQueue();
+
+    let lastDownloadCount = 0;
+    let stuckCounter = 0;
+    let lastSuccessTime = Date.now(); 
+
+    while (downloadCount < TARGET_DOWNLOAD_COUNT) {
+        if (Date.now() - lastSuccessTime > 25000) {
+            console.log('⚠️ [STUCK DETECTED] No media progress in 25s. Running soft pipeline recovery...');
+            try {
+                await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+                lastSuccessTime = Date.now(); 
+                await page.waitForTimeout(2000);
+            } catch (e) {
+                try { await page.evaluate(() => window.scrollTo(0, 0)); } catch(err){}
+                lastSuccessTime = Date.now(); 
+            }
+        }
+
+        await dismissLoginPopup(page);
+        
+        if (downloadQueue.length > 20) { 
+            console.log(`\n🛑 [QUEUE BACKLOG DETECTED] Backlog size: ${downloadQueue.length}. Freezing media play states...`);
+            
+            await page.evaluate(() => {
+                const currentVideo = document.querySelector('video');
+                if (currentVideo && typeof currentVideo.pause === 'function') {
+                    currentVideo.pause();
+                }
+            }).catch(() => {});
+
+            while (downloadQueue.length > 6) {
+                await page.waitForTimeout(1000);
+            }
+
+            console.log('▶️ [BACKLOG RESOLVED] Resuming stream playback...\n');
+            
+            await page.evaluate(() => {
+                const currentVideo = document.querySelector('video');
+                if (currentVideo && typeof currentVideo.play === 'function') {
+                    currentVideo.play();
+                }
+            }).catch(() => {});
+        }
+
+        try {
+            const startX = 195 + (Math.random() * 30 - 15);
+            const startY = 680 + (Math.random() * 40 - 20);
+            const endY = 130 + (Math.random() * 30 - 15);
+
+            await page.mouse.move(startX, startY);
+            await page.mouse.down();
+            await page.mouse.move(startX - (Math.random() * 12), 430, { steps: Math.floor(Math.random() * 3) + 4 });
+            await page.mouse.move(startX + (Math.random() * 8), endY, { steps: Math.floor(Math.random() * 3) + 4 });
+            await page.mouse.up();
+            
+            console.log(`[TOUCH SWIPE] Crawled feed step. Saved items: ${downloadCount}/${TARGET_DOWNLOAD_COUNT}`);
+        } catch (swipeError) {
+            try { await page.evaluate(() => window.scrollBy(0, window.innerHeight)); } catch(e){}
+        }
+        
+        await page.waitForTimeout(1500);
+        
+        await page.evaluate(() => {
+            document.querySelectorAll('video').forEach(video => {
+                if (video && typeof video.pause === 'function') {
+                    video.pause();
+                    video.removeAttribute('src'); 
+                    video.load(); 
+                }
+            });
+        }).catch(() => {});
+
+        if (downloadCount === lastDownloadCount) {
+            stuckCounter++;
+            
+            if (stuckCounter > 2) {
+                console.log('⚠️ [STUCK SEGMENT] Container tracking lost. Re-focusing viewport elements...');
+                try {
+                    await page.touchscreen.tap(195, 400);
+                    await page.waitForTimeout(400);
+                    await page.evaluate(() => {
+                        const mainContainer = document.querySelector('main') || window;
+                        mainContainer.scrollBy(0, window.innerHeight);
+                    });
+                } catch (scrollErr) {}
+                stuckCounter = 0;
+            }
+        } else {
+            stuckCounter = 0;
+            lastDownloadCount = downloadCount;
+            lastSuccessTime = Date.now(); 
+        }
+        
+        const behavioralRoll = Math.random();
+        let viewDelay = Math.floor(Math.random() * 2500) + 2200; 
+        
+        if (behavioralRoll < 0.20) {
+            viewDelay = Math.floor(Math.random() * 800) + 1200;
+        } else if (behavioralRoll > 0.82 && behavioralRoll <= 0.92) {
+            try {
+                const jitterX = 195 + Math.floor(Math.random() * 40 - 20);
+                const jitterY = 422 + Math.floor(Math.random() * 40 - 20);
+                await page.touchscreen.tap(jitterX, jitterY);
+                await page.waitForTimeout(Math.floor(Math.random() * 1500) + 1000);
+                await page.evaluate(() => window.scrollBy(0, 120));
+                await page.waitForTimeout(Math.floor(Math.random() * 2000) + 2000);
+                await page.evaluate(() => window.scrollBy(0, -120));
+                await page.waitForTimeout(Math.floor(Math.random() * 1000) + 1000);
+                await page.touchscreen.tap(jitterX, jitterY);
+            } catch (err) {}
+            viewDelay = Math.floor(Math.random() * 2000) + 2000;
+        } else if (behavioralRoll > 0.92 && behavioralRoll <= 0.96) {
+            try {
+                const fumbleX = Math.random() < 0.5 ? (30 + Math.random() * 40) : (340 + Math.random() * 30);
+                const fumbleY = 300 + Math.floor(Math.random() * 200);
+                await page.mouse.move(fumbleX, fumbleY);
+                await page.mouse.down();
+                await page.mouse.move(fumbleX + (Math.random() * 40 - 20), fumbleY - (Math.random() * 60 + 20), { steps: 2 });
+                await page.mouse.up();
+                await page.waitForTimeout(Math.floor(Math.random() * 2500) + 2000);
+            } catch (err) {}
+            viewDelay = Math.floor(Math.random() * 2000) + 2000;
+        } else if (behavioralRoll > 0.96) {
+            try {
+                const profileHandleX = 65 + Math.floor(Math.random() * 30 - 15);
+                const profileHandleY = 745 + Math.floor(Math.random() * 20 - 10);
+                await page.touchscreen.tap(profileHandleX, profileHandleY);
+                await page.waitForTimeout(Math.floor(Math.random() * 3000) + 4000);
+                await page.goBack({ waitUntil: 'domcontentloaded' });
+            } catch (err) {}
+            viewDelay = Math.floor(Math.random() * 3000) + 3000;
+        }
+
+        await page.waitForTimeout(viewDelay);
+    }
+
+    while(downloadQueue.length > 0 || activeDownloads > 0) {
+        await new Promise(r => setTimeout(r, 1000));
+    }
+
+    try { if (fs.existsSync(LOCK_FILE_PATH)) fs.unlinkSync(LOCK_FILE_PATH); } catch(e){}
+
+    console.log(`\n🎉 Success! Processed session cap of ${downloadCount} fresh items into storage.`);
+    await browser.close();
+    process.exit(0);
+})();
