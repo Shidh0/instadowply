@@ -59,8 +59,7 @@ You can update the script by running
   ```
 * NOTE:If you want to exit/stop downloading half way just open termux and do Ctrl+c.
    ## Windows
-  NOTE: Windows version is not actively maintained (bcus i don't have a pc lol)
-  
+  (updated)  
    Node js needed for the script install it from [Node js Download](https://nodejs.org/en/download)
 Then run terminal and paste these
 ```bash
