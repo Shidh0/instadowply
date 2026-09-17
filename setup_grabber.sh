@@ -5,15 +5,8 @@ echo "   Starting Insta-Bulk-Grabber Setup        "
 echo "============================================="
 
 # 1. Update and install repository extensions
-echo "Updating packages and setting up additional repos..."
-pkg install nodejs python x11-repo tur-repo curl -y
-
-# 2. Install all system dependencies and Chromium (Corrected for Termux)
-echo "Installing build essentials and system UI libraries..."
-pkg install build-essential binutils freetype fontconfig chromium -y
-
-# Install the specific X11/graphics libraries with proper Termux naming
-pkg install libcairo libpango libxi libxtst libxcomposite libxdamage alsa-lib -y
+echo "Downloading dependencies..."
+pkg install nodejs x11-repo tur-repo curl freetype fontconfig chromium libcairo libpango libxi libxtst libxcomposite libxdamage alsa-lib -y
 
 # 3. Request storage access if not already granted
 echo "Requesting storage permissions..."
@@ -42,7 +35,7 @@ chmod +x ~/insta-bulk-grabber/Update.sh
 chmod +x ~/sync_reels.sh
 
 # 6. Install Node modules with Playwright adjustments
-echo "Installing Node packages (Skipping heavy browser bundle)..."
+echo "Installing Node packages ..."
 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install playwright axios
 
 # 7. Dynamic Warning Prompt before modifying bash.bashrc
@@ -85,7 +78,9 @@ else
 fi
 
 echo ""
-
+echo "Cleaning up ..."
+pkg clean
+npm cache clean --force
 # 8. Fire up the configuration script right at the end of the installation
 echo "Running initial configuration sequence..."
 ~/insta-bulk-grabber/configure.sh
