@@ -68,6 +68,9 @@ cd insta-bulk-grabber
 curl -o windows_grabber.js https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/Windows/windows_grabber.js
 curl -o cookies.json https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/cookies.json
 curl -o package.json https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/Windows/package.json
+curl -o configure.bat https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/Windows/configure.bat
+curl -o Start.cmd https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/Windows/Start.cmd
+curl -o package-lock.json https://raw.githubusercontent.com/Shidh0/instadowply/refs/heads/main/Windows/package-lock.json
 npm run setup
 ```
 ## Lunix
