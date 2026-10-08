@@ -1,692 +1,1059 @@
 // ============================================================================
-// SAFE PIPELINE CORES (Silently absorb background media or asset timeout drops)
+// windows_grabber.js  —  v2.2 (Windows)
+// Same save locations / lock file / file names as v1. See the notes in chat.
+//
+// Usage: node windows_grabber.js [flags]
+//   --debug     verbose console output, periodic screenshots, live view (see below)
+//   --live      live view only: open http://127.0.0.1:8787 in Chrome/Edge
+//   --no-live   turn the live view off even when --debug is on
+//   --headed    show the browser window so you can watch it work
+//   --trace     record a Playwright trace to debug/trace.zip (open at trace.playwright.dev)
+//   --ascii     console without emoji (automatic in old cmd.exe windows)
+//   --emoji     force emoji in the console
+//   --help      show this list
+// Env: GRABBER_DEBUG=1 (same as --debug), LIVE_PORT=8787
+// A log file is ALWAYS written to logs/run-<time>.log (last 10 runs are kept).
 // ============================================================================
-process.on('unhandledRejection', (reason) => {
-    if (reason?.message?.includes('Timeout') || reason?.message?.includes('status code')) return;
-    if (reason?.message?.includes('Target page snapped') || reason?.message?.includes('context mapping')) return;
-    console.log('?? Intercepted background stream exception:', reason?.message || reason);
-});
 
-const { chromium } = require('playwright');
-const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
+const util = require('util');
+const { pipeline } = require('stream/promises');
 
 // ============================================================================
-// SYSTEM ARCHITECTURE CONFIGURATIONS (WINDOWS OPTIMIZED)
+// COMMAND-LINE FLAGS
 // ============================================================================
-const COOKIES_FILE = path.join(__dirname, 'cookies.json');
-const HISTORY_FILE = path.join(__dirname, 'history.json');
-const QUEUE_BACKLOG_FILE = path.join(__dirname, 'queue_backlog.json'); 
-const DOWNLOAD_FOLDER = path.join(__dirname, '.Reels');
-const LOCK_FILE_PATH = path.join(DOWNLOAD_FOLDER, 'download.lock');
-
-// ============================================================================
-// GRACEFUL SHUTDOWN INTERCEPTOR (Ctrl+C Cleanup & Backlog State Save)
-// ============================================================================
-const cleanupAndExit = () => {
-    console.log('\n?? Script interrupted via Ctrl+C. Initiating structural cache dump...');
-    try {
-        if (downloadQueue.length > 0) {
-            fs.writeFileSync(QUEUE_BACKLOG_FILE, JSON.stringify(downloadQueue, null, 2), 'utf8');
-            console.log(`?? Saved ${downloadQueue.length} pending items from memory stream to queue_backlog.json.`);
-        }
-        if (fs.existsSync(LOCK_FILE_PATH)) {
-            fs.unlinkSync(LOCK_FILE_PATH);
-            console.log('??? download.lock successfully removed from hidden .Reels folder.');
-        }
-    } catch (e) {
-        console.log('?? Could not complete cleanup cycle during shutdown:', e.message);
-    }
+const ARGS = new Set(process.argv.slice(2));
+if (ARGS.has('--help') || ARGS.has('-h')) {
+    console.log(`Usage: node windows_grabber.js [flags]
+  --debug     verbose console + file logs, screenshots, live view at http://127.0.0.1:8787
+  --live      live view only (browser screenshot + status in Chrome/Edge)
+  --no-live   disable the live view even with --debug
+  --headed    show the browser window so you can watch it work
+  --trace     record a Playwright trace to debug/trace.zip
+  --ascii     console without emoji (automatic in old cmd.exe windows)
+  --emoji     force emoji in the console
+Env: GRABBER_DEBUG=1, LIVE_PORT=8787`);
     process.exit(0);
+}
+const DEBUG  = ARGS.has('--debug') || process.env.GRABBER_DEBUG === '1';
+const HEADED = ARGS.has('--headed');
+const TRACE  = ARGS.has('--trace');
+const LIVE_PORT = ARGS.has('--no-live') ? 0 : (DEBUG || ARGS.has('--live')) ? (Number(process.env.LIVE_PORT) || 8787) : 0;
+const LIVE_SHOT_INTERVAL_MS = 2000;
+// Old cmd.exe / PowerShell consoles show emoji as '?'. Windows Terminal and VS Code are fine.
+const EMOJI_OK = ARGS.has('--emoji') || (!ARGS.has('--ascii') && !!(process.env.WT_SESSION || process.env.TERM_PROGRAM || process.env.VSCODE_PID));
+function asciiOnly(t) {
+    return t.replace(/→/g, '->').replace(/↳/g, '>').replace(/[—–]/g, '-').replace(/…/g, '...').replace(/·/g, '|')
+            .replace(/[^\x00-\x7F]/g, '').replace(/ {2,}/g, ' ').replace(/^(\[[0-9:]+\]) /, '$1 ');
+}
+
+// ============================================================================
+// PATHS  (unchanged from v1 — your app depends on these)
+// ============================================================================
+const CHROMIUM_PATH      = process.env.CHROMIUM_PATH || null;   // null = Playwright's own Chromium (set the env var to use Chrome/Edge)
+const COOKIES_FILE       = path.join(__dirname, 'cookies.json');
+const HISTORY_FILE       = path.join(__dirname, 'history.json');
+const QUEUE_BACKLOG_FILE = path.join(__dirname, 'queue_backlog.json');
+const PID_FILE           = path.join(__dirname, 'grabber.pid');
+const DOWNLOAD_FOLDER    = path.join(__dirname, '.Reels');
+const LOCK_FILE_PATH     = path.join(DOWNLOAD_FOLDER, 'download.lock');
+const LIKES_FILE         = path.join(DOWNLOAD_FOLDER, 'pending_likes.json');
+
+// ============================================================================
+// TUNABLES
+// ============================================================================
+const TARGET_DOWNLOAD_COUNT   = 130;     // reels to save per run
+const MAX_HISTORY_SIZE        = 15000;
+const MAX_CONCURRENT_DOWNLOADS = 3;
+const MAX_ATTEMPTS_PER_REEL   = 3;
+const MAX_LIKES_PER_RUN       = 30;      // extra likes stay in pending_likes.json for next run
+const MAX_SESSION_MINUTES     = 90;      // hard stop for one run
+const MAX_SWIPES_WITHOUT_SAVE = 150;     // feed only shows already-saved reels -> stop
+const FEED_IDLE_RELOAD_MS     = 30000;   // no new reels from the feed for this long -> reload feed
+const MAX_FEED_RELOADS_IN_ROW = 3;       // reload this many times without result -> stop
+const DOWNLOAD_IDLE_TIMEOUT_MS = 30000;  // abort a download that stops receiving bytes
+const BACKLOG_PAUSE_AT        = 20;      // stop swiping while queue is longer than this...
+const BACKLOG_RESUME_AT       = 6;       // ...until it drains to this
+
+// ============================================================================
+// SMALL HELPERS
+// ============================================================================
+const sleep   = (ms) => new Promise((r) => setTimeout(r, ms));
+const rand    = (a, b) => a + Math.random() * (b - a);
+const randInt = (a, b) => Math.floor(rand(a, b + 1));
+
+// ============================================================================
+// LOGGING — console + logs/run-<time>.log (the file always gets everything,
+// including DEBUG lines; the console only shows DEBUG lines with --debug)
+// ============================================================================
+const LOG_DIR   = path.join(__dirname, 'logs');
+const DEBUG_DIR = path.join(__dirname, 'debug');
+const startedAt = Date.now();
+const recentLines = [];
+let logStream = null;
+let logFile = '(file logging unavailable)';
+try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    const old = fs.readdirSync(LOG_DIR).filter((f) => /^run-.*\.log$/.test(f)).sort();
+    old.slice(0, Math.max(0, old.length - 9)).forEach((f) => safeUnlink(path.join(LOG_DIR, f)));
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    logFile = path.join(LOG_DIR, `run-${stamp}.log`);
+    logStream = fs.createWriteStream(logFile, { flags: 'a' });
+    logStream.on('error', () => { logStream = null; });
+} catch (_) {}
+
+function fmtArgs(args) {
+    return args.map((a) => typeof a === 'string' ? a
+        : a instanceof Error ? (a.stack || a.message)
+        : util.inspect(a, { depth: 3, breakLength: 160 })).join(' ');
+}
+function emit(level, args) {
+    const msg = fmtArgs(args);
+    const now = new Date();
+    const hms = now.toTimeString().slice(0, 8);
+    let tag = level;
+    if (level === 'INFO') {
+        if (/^\s*(❌|💥|⛔)/.test(msg)) tag = 'ERROR';
+        else if (/^\s*⚠️/.test(msg)) tag = 'WARN';
+    }
+    if (logStream) logStream.write(`${now.toISOString()} ${tag.padEnd(5)} ${msg}\n`);
+    const line = level === 'DEBUG' ? `[${hms}] 🔍 ${msg}` : `[${hms}] ${msg}`;
+    recentLines.push(line);
+    if (recentLines.length > 60) recentLines.shift();
+    if (level !== 'DEBUG' || DEBUG) console.log(EMOJI_OK ? line : asciiOnly(line));
+}
+const log = (...a) => emit('INFO', a);
+const dbg = (...a) => emit('DEBUG', a);
+
+function sleepSync(ms) { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (_) {} }
+
+// Windows refuses to rename/delete a file another program has open for a moment
+// (antivirus, your player app, Explorer preview), so these retry briefly.
+function renameWithRetry(from, to, tries = 8) {
+    for (let i = 0; ; i++) {
+        try { fs.renameSync(from, to); return; }
+        catch (e) {
+            if (i >= tries - 1 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+            sleepSync(100 + i * 100);
+        }
+    }
+}
+function unlinkWithRetry(p, tries = 8) {
+    for (let i = 0; ; i++) {
+        try { fs.unlinkSync(p); return; }
+        catch (e) {
+            if (e.code === 'ENOENT') return;
+            if (i >= tries - 1 || !['EPERM', 'EBUSY', 'EACCES'].includes(e.code)) throw e;
+            sleepSync(100 + i * 100);
+        }
+    }
+}
+function safeUnlink(p) { try { fs.unlinkSync(p); } catch (_) {} }
+
+// Write to a temp file then rename, so a crash can never leave half a JSON file.
+function writeFileAtomic(file, data) {
+    const tmp = file + '.tmp';
+    fs.writeFileSync(tmp, data, 'utf8');
+    try { renameWithRetry(tmp, file); }
+    catch (e) {                                            // last resort: write in place
+        fs.writeFileSync(file, data, 'utf8');
+        safeUnlink(tmp);
+    }
+}
+
+function readJsonSafe(file, fallback) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch (_) { return fallback; }
+}
+
+// ============================================================================
+// STATE
+// ============================================================================
+let USER_AGENT = 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+
+let browser = null;
+let stopping = false;
+let shuttingDown = false;
+
+let downloadQueue = [];          // tasks waiting
+const inFlight = new Map();      // id -> task currently downloading
+const seenIds = new Set();       // queued / in flight / saved during this run (prevents duplicates)
+const feedSeen = new Set();      // every reel id the feed has shown us this run
+let downloadCount = 0;
+let lastFeedActivity = Date.now();
+let swipesSinceSave = 0;
+let lockHeld = false;
+let pumpTimer = null;
+let context = null;
+let activePage = null;
+let lastShot = null;
+let snapSeq = 0;
+let liveServer = null;
+const knownCodes = new Set();     // reel shortcodes whose data we have (saved, queued, or already in history)
+const visitedCodes = new Set();   // reel shortcodes the browser has actually shown (from the URL)
+let fallbackFails = 0;
+let fallbackDisabled = false;
+let samplesSaved = 0;
+const stats = {
+    swipes: 0, queued: 0, skippedHistory: 0, skippedDuplicate: 0, skippedTarget: 0,
+    expired: 0, failed: 0, bytes: 0, apiResponses: 0, apiParseErrors: 0, reloads: 0, fallbackCalls: 0, fallbackFail: 0,
 };
 
-process.on('SIGINT', cleanupAndExit);
-process.on('SIGTERM', cleanupAndExit);
-
-const TARGET_DOWNLOAD_COUNT = 130;
-const MAX_HISTORY_SIZE = 15000;
-const MAX_CONCURRENT_DOWNLOADS = 3;
-
-if (!fs.existsSync(DOWNLOAD_FOLDER)) {
-    fs.mkdirSync(DOWNLOAD_FOLDER, { recursive: true });
-}
-
-let downloadedVideoIds = [];
+// ---- history -------------------------------------------------------------
+let historyList = [];
 if (fs.existsSync(HISTORY_FILE)) {
     try {
-        downloadedVideoIds = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
-        console.log(`?? Loaded ${downloadedVideoIds.length} historical Reel IDs from history.json`);
+        const h = JSON.parse(fs.readFileSync(HISTORY_FILE, 'utf8'));
+        if (!Array.isArray(h)) throw new Error('history.json is not an array');
+        historyList = h.map(String);
+        log(`📦 Loaded ${historyList.length} historical Reel IDs from history.json`);
     } catch (e) {
-        console.log('?? History log corrupted, initializing fresh array.');
-        downloadedVideoIds = [];
+        try { fs.copyFileSync(HISTORY_FILE, HISTORY_FILE + '.corrupt'); } catch (_) {}
+        log(`⚠️ history.json unreadable (${e.message}). Backed up to history.json.corrupt and starting fresh.`);
+        historyList = [];
     }
 }
+const historySet = new Set(historyList);
+let historyDirty = false;
 
-let downloadQueue = []; 
-if (fs.existsSync(QUEUE_BACKLOG_FILE)) {
+function addToHistory(id) {
+    if (historySet.has(id)) return;
+    historySet.add(id);
+    historyList.push(id);
+    if (historyList.length > MAX_HISTORY_SIZE) {
+        const removed = historyList.splice(0, historyList.length - MAX_HISTORY_SIZE);
+        removed.forEach((r) => historySet.delete(r));
+        log(`🧹 History limit reached. Purged ${removed.length} oldest entries.`);
+    }
+    historyDirty = true;
+}
+
+function flushHistory() {
+    if (!historyDirty) return;
+    try { writeFileAtomic(HISTORY_FILE, JSON.stringify(historyList, null, 2)); historyDirty = false; }
+    catch (e) { log('⚠️ Could not write history.json:', e.message); }
+}
+setInterval(flushHistory, 3000).unref();
+
+// ---- lock file (same path + content as v1) ---------------------------------
+function syncLock() {
+    const busy = inFlight.size > 0 || downloadQueue.length > 0;
     try {
-        downloadQueue = JSON.parse(fs.readFileSync(QUEUE_BACKLOG_FILE, 'utf8'));
-        console.log(`?? Successfully restored ${downloadQueue.length} unfinished targets from queue_backlog.json`);
-        fs.unlinkSync(QUEUE_BACKLOG_FILE); 
-    } catch (e) {
-        console.log('?? Queue backlog state corrupted, cleaning execution context.');
-        downloadQueue = [];
-    }
+        if (busy && !lockHeld) { fs.writeFileSync(LOCK_FILE_PATH, 'ACTIVE', 'utf8'); lockHeld = true; }
+        else if (!busy && lockHeld) { unlinkWithRetry(LOCK_FILE_PATH); lockHeld = false; }
+    } catch (_) {}
 }
+function removeLock() { try { unlinkWithRetry(LOCK_FILE_PATH); } catch (_) {} lockHeld = false; }
 
-let downloadCount = 0;
-let activeDownloads = 0;
-
-function saveToHistory(videoId) {
-    if (downloadedVideoIds.includes(videoId)) return;
-    downloadedVideoIds.push(videoId);
-    if (downloadedVideoIds.length > MAX_HISTORY_SIZE) {
-        const itemsToRemove = downloadedVideoIds.length - MAX_HISTORY_SIZE;
-        downloadedVideoIds.splice(0, itemsToRemove);
-        console.log(`\n?? History limit reached. Purged ${itemsToRemove} oldest entries from log.`);
-    }
-    fs.writeFileSync(HISTORY_FILE, JSON.stringify(downloadedVideoIds, null, 2), 'utf8');
-}
-
-// ============================================================================
-// LIKE SYNC ENGINE (Decodes long IDs, kills interstitials & executes click matrix)
-// ============================================================================
-async function processPlayerLikes(page) {
-    const LIKES_FILE = path.join(DOWNLOAD_FOLDER, 'pending_likes.json');
-    if (!fs.existsSync(LIKES_FILE)) return;
-
+// ---- backlog ---------------------------------------------------------------
+function persistBacklog() {
+    const pending = [...inFlight.values(), ...downloadQueue];
     try {
-        const fileContent = fs.readFileSync(LIKES_FILE, 'utf8');
-        let pendingIds = [];
-        try { pendingIds = JSON.parse(fileContent); } catch (jsonErr) { return; }
-
-        if (!Array.isArray(pendingIds) || pendingIds.length === 0) return;
-
-        console.log(`\n?? Found ${pendingIds.length} pending Likes to process...`);
-
-        for (const id of pendingIds) {
-            let targetShortcode = id;
-
-            if (/^\d+(_\d+)?$/.test(id)) {
-                const mediaIdStr = id.split('_')[0];
-                try {
-                    let num = BigInt(mediaIdStr);
-                    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
-                    let buildCode = '';
-                    while (num > 0n) {
-                        let remainder = num % 64n;
-                        buildCode = alphabet[Number(remainder)] + buildCode;
-                        num = num / 64n;
-                    }
-                    targetShortcode = buildCode;
-                } catch (err) {
-                    targetShortcode = id;
-                }
-            }
-
-            console.log(`  -> Automated targeting for Reel ID: ${id} (Resolved Shortcode: ${targetShortcode})`);
-            try {
-                await page.goto(`https://www.instagram.com/reels/${targetShortcode}/`, { 
-                    waitUntil: 'domcontentloaded', 
-                    timeout: 30000 
-                });
-                
-                await page.waitForTimeout(5000);
-
-                await page.evaluate(() => {
-                    document.body.style.overflow = 'auto';
-                    document.body.style.pointerEvents = 'auto';
-                    document.documentElement.style.overflow = 'auto';
-
-                    const blockingPhrases = ['open app', 'watch in app', 'use app', 'log in', 'sign up', 'experience the best', 'not now'];
-                    const overlays = document.querySelectorAll('div, section, [role="dialog"]');
-                    
-                    overlays.forEach(el => {
-                        const style = window.getComputedStyle(el);
-                        if (style.position === 'fixed' || style.position === 'absolute') {
-                            const text = el.innerText?.toLowerCase() || '';
-                            if (blockingPhrases.some(p => text.includes(p))) {
-                                const dismissBtns = el.querySelectorAll('button, [role="button"]');
-                                dismissBtns.forEach(b => {
-                                    const bText = b.innerText?.toLowerCase() || '';
-                                    if (bText.includes('not now') || bText.includes('close') || bText.length === 0) {
-                                        b.click();
-                                    }
-                                });
-                                el.remove();
-                            }
-                        }
-                    });
-                }).catch(() => {});
-
-                await page.waitForTimeout(1000);
-
-                const currentStatus = await page.evaluate(() => {
-                    const allSvgs = Array.from(document.querySelectorAll('svg'));
-                    const isUnlikedAlready = allSvgs.some(s => /unlike/i.test(s.getAttribute('aria-label') || ''));
-                    return { liked: isUnlikedAlready };
-                }).catch(() => ({ liked: false }));
-
-                if (currentStatus.liked) {
-                    console.log(`     ?? Reel is already liked. Skipping entry adjustment.`);
-                    continue;
-                }
-
-                const likeDispatched = await page.evaluate(() => {
-                    const allSvgs = Array.from(document.querySelectorAll('svg'));
-                    let matchIcon = allSvgs.find(svg => {
-                        const label = svg.getAttribute('aria-label') || '';
-                        return /like/i.test(label) && !/unlike/i.test(label);
-                    });
-
-                    if (!matchIcon) {
-                        matchIcon = document.querySelector('[aria-label="Like"]') || document.querySelector('[aria-label="like"]');
-                    }
-
-                    if (!matchIcon) return false;
-
-                    const coreTarget = matchIcon.closest('button') || matchIcon.closest('[role="button"]') || matchIcon;
-                    coreTarget.scrollIntoView({ block: 'center' });
-
-                    const rect = coreTarget.getBoundingClientRect();
-                    const baseX = rect.left + rect.width / 2;
-                    const baseY = rect.top + rect.height / 2;
-
-                    const jitterX = baseX + (Math.floor(Math.random() * 9) - 4);
-                    const jitterY = baseY + (Math.floor(Math.random() * 9) - 4);
-
-                    const eventSequence = ['touchstart', 'touchend', 'pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click'];
-                    
-                    let executionLayer = coreTarget;
-                    for (let depth = 0; depth < 3; depth++) {
-                        if (!executionLayer) break;
-                        
-                        eventSequence.forEach(evtName => {
-                            let simulatedEvt;
-                            const standardConfig = { bubbles: true, cancelable: true, view: window, clientX: jitterX, clientY: jitterY };
-                            
-                            if (evtName.startsWith('touch')) {
-                                const singleTouch = new Touch({ identifier: Date.now(), target: executionLayer, clientX: jitterX, clientY: jitterY });
-                                simulatedEvt = new TouchEvent(evtName, { bubbles: true, cancelable: true, touches: [singleTouch], targetTouches: [singleTouch], changedTouches: [singleTouch] });
-                            } else if (evtName.startsWith('pointer')) {
-                                simulatedEvt = new PointerEvent(evtName, standardConfig);
-                            } else {
-                                simulatedEvt = new MouseEvent(evtName, standardConfig);
-                            }
-                            executionLayer.dispatchEvent(simulatedEvt);
-                        });
-
-                        if (typeof executionLayer.click === 'function') {
-                            executionLayer.click();
-                        }
-                        executionLayer = executionLayer.parentElement;
-                    }
-                    return true;
-                }).catch(() => false);
-
-                if (likeDispatched) {
-                    console.log(`     ? Complete Event Dispatch Matrix injected into Like element layers.`);
-                } else {
-                    const heartBtn = await page.$('button:has(svg[aria-label="Like"]), svg[aria-label="Like"], [aria-label="Like"]').catch(() => null);
-                    if (heartBtn) {
-                        const box = await heartBtn.boundingBox().catch(() => null);
-                        if (box) {
-                            const nativeJitterX = (box.x + box.width / 2) + (Math.floor(Math.random() * 7) - 3);
-                            const nativeJitterY = (box.y + box.height / 2) + (Math.floor(Math.random() * 7) - 3);
-                            
-                            await page.touchscreen.tap(nativeJitterX, nativeJitterY);
-                            console.log(`     ? Playwright Native Jittered Touchscreen Tap Fallback deployed.`);
-                        }
-                    }
-                }
-
-                const postLikeDelay = Math.floor(Math.random() * 3000) + 3000; 
-                await page.waitForTimeout(postLikeDelay);
-            } catch (err) {
-                console.log(`     ? Link unavailable or skipped: ${err.message}`);
-            }
+        if (pending.length) {
+            writeFileAtomic(QUEUE_BACKLOG_FILE, JSON.stringify(pending));
+            log(`💾 Saved ${pending.length} unfinished item(s) to queue_backlog.json`);
+        } else if (fs.existsSync(QUEUE_BACKLOG_FILE)) {
+            fs.unlinkSync(QUEUE_BACKLOG_FILE);
         }
-
-        fs.writeFileSync(LIKES_FILE, JSON.stringify([]), 'utf8');
-        await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
-    } catch (e) {
-        console.log('?? Notice processing sync pipeline:', e.message);
-    }
+    } catch (e) { log('⚠️ Could not save backlog:', e.message); }
 }
 
 // ============================================================================
-// SPEED-OPTIMIZED ASYNC MULTI-SLOT CONCURRENT DOWNLOAD WORKER
+// DEBUG TOOLS: screenshots, live view, page diagnostics, summaries
 // ============================================================================
-async function executeIndividualDownload(task) {
-    const filePath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.mp4`);
-    const pfpPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}.jpg`);
-    const songPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_song.jpg`);
-    const metadataPath = path.join(DOWNLOAD_FOLDER, `reel_${task.id}_metadata.json`); 
+const mb = (n) => (n / 1048576).toFixed(1);
 
-    if (task.rawMetadata) {
-        try { 
-            fs.writeFileSync(metadataPath, JSON.stringify(task.rawMetadata, null, 2), 'utf8'); 
-        } catch (e) {}
-    }
+function logSummary() {
+    const mins = ((Date.now() - startedAt) / 60000).toFixed(1);
+    log(`📊 Summary: ${downloadCount} saved (${mb(stats.bytes)} MB) · ${stats.swipes} swipes · ${mins} min`);
+    log(`   queued ${stats.queued} · skipped: history ${stats.skippedHistory}, duplicate ${stats.skippedDuplicate}, over-target ${stats.skippedTarget} · expired ${stats.expired} · failed ${stats.failed}`);
+    log(`   Instagram API bodies read ${stats.apiResponses} (errors ${stats.apiParseErrors}) · reels visited ${visitedCodes.size}, data captured ${knownCodes.size} · URL lookups ${stats.fallbackCalls} (failed ${stats.fallbackFail}) · feed reloads ${stats.reloads}`);
+    log(`   log file: ${logFile}`);
+}
 
-    const commonHeaders = {
-        'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
-        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+async function takeShot(quality = 55) {
+    if (!activePage) return null;
+    try { return await activePage.screenshot({ type: 'jpeg', quality, timeout: 5000 }); }
+    catch (e) { dbg(`screenshot failed: ${e.message}`); return null; }
+}
+
+// Saved to ./debug (newest 40 kept). Taken automatically on problems, and every
+// 10 swipes in --debug mode.
+async function snap(label) {
+    const buf = await takeShot();
+    if (!buf) return;
+    lastShot = buf;
+    try {
+        fs.mkdirSync(DEBUG_DIR, { recursive: true });
+        const name = `${Math.floor(Date.now() / 1000)}-${String(++snapSeq).padStart(3, '0')}-${label.replace(/[^a-z0-9_-]/gi, '_')}.jpg`;
+        fs.writeFileSync(path.join(DEBUG_DIR, name), buf);
+        const files = fs.readdirSync(DEBUG_DIR).filter((f) => f.endsWith('.jpg')).sort();
+        files.slice(0, Math.max(0, files.length - 40)).forEach((f) => safeUnlink(path.join(DEBUG_DIR, f)));
+        log(`📸 Screenshot: debug/${name}`);
+    } catch (e) { dbg(`could not save screenshot: ${e.message}`); }
+}
+
+function getStatus() {
+    return {
+        running: `${Math.round((Date.now() - startedAt) / 1000)}s`,
+        url: activePage ? activePage.url().slice(0, 100) : '',
+        saved: `${downloadCount}/${TARGET_DOWNLOAD_COUNT}`,
+        queue: downloadQueue.length,
+        downloading: inFlight.size,
+        swipes: stats.swipes,
+        reelsSeen: feedSeen.size,
+        secondsSinceNewReel: Math.round((Date.now() - lastFeedActivity) / 1000),
+        lockFile: lockHeld ? 'ACTIVE' : 'none',
+        log: recentLines.slice(-25),
     };
+}
+
+const LIVE_HTML = `<!doctype html><meta name=viewport content="width=device-width,initial-scale=1"><title>Grabber live</title>
+<style>body{margin:0;background:#111;color:#ddd;font:12px monospace}img{width:100%;max-width:420px;display:block;margin:auto;background:#000}pre{white-space:pre-wrap;padding:8px;margin:0}</style>
+<img id=s><pre id=t>connecting...</pre>
+<script>
+const img=document.getElementById('s'),t=document.getElementById('t');
+function shot(){img.onload=img.onerror=()=>setTimeout(shot,1200);img.src='/shot.jpg?'+Date.now()}
+async function st(){try{const j=await(await fetch('/status')).json();t.textContent=Object.entries(j).filter(([k])=>k!=='log').map(([k,v])=>k+': '+v).join('\\n')+'\\n\\n'+j.log.join('\\n')}catch(e){}setTimeout(st,1500)}
+shot();st();
+</script>`;
+
+// Local-only (127.0.0.1) page showing what the headless browser sees right now.
+function startLiveView() {
+    if (!LIVE_PORT) return;
+    liveServer = http.createServer((req, res) => {
+        if (req.url.startsWith('/shot.jpg')) {
+            if (!lastShot) { res.writeHead(204); return res.end(); }
+            res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store' });
+            return res.end(lastShot);
+        }
+        if (req.url.startsWith('/status')) {
+            res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+            return res.end(JSON.stringify(getStatus()));
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(LIVE_HTML);
+    });
+    liveServer.on('error', (e) => { log(`⚠️ Live view could not start on port ${LIVE_PORT}: ${e.message}`); liveServer = null; });
+    liveServer.listen(LIVE_PORT, '127.0.0.1', () => log(`👁️ Live view: open http://127.0.0.1:${LIVE_PORT} in Chrome/Edge on this PC`));
+
+    let busy = false;
+    setInterval(async () => {
+        if (busy || shuttingDown) return;
+        busy = true;
+        const b = await takeShot(50);
+        if (b) lastShot = b;
+        busy = false;
+    }, LIVE_SHOT_INTERVAL_MS).unref();
+}
+
+function attachPageDiagnostics(page) {
+    page.on('framenavigated', (f) => { if (f === page.mainFrame()) log(`🧭 Navigated: ${f.url().slice(0, 120)}`); });
+    page.on('crash', () => log('💥 Browser tab crashed (probably out of memory).'));
+    page.on('pageerror', (e) => { if (DEBUG) dbg(`page error: ${e.message}`); });
+    page.on('console', (m) => { if (DEBUG && (m.type() === 'error' || m.type() === 'warning')) dbg(`console.${m.type()}: ${m.text().slice(0, 200)}`); });
+    page.on('requestfailed', (r) => { if (DEBUG) dbg(`request failed (${(r.failure() || {}).errorText}): ${r.url().slice(0, 100)}`); });
+    page.on('response', (r) => {
+        const st = r.status();
+        if (st >= 400 && /instagram\.com|cdninstagram|fbcdn/.test(r.url())) dbg(`HTTP ${st} ${r.request().resourceType()}: ${r.url().slice(0, 110)}`);
+    });
+}
+
+// ============================================================================
+// SHUTDOWN (Ctrl+C, kill, crash, or normal finish all go through here)
+// ============================================================================
+async function shutdown(reason, code = 0) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    stopping = true;
+    log(`🛑 Shutting down (${reason})...`);
+    try {
+        persistBacklog();
+        flushHistory();
+        for (const id of inFlight.keys()) safeUnlink(path.join(DOWNLOAD_FOLDER, `reel_${id}.mp4.part`));
+        removeLock();
+        safeUnlink(PID_FILE);
+        logSummary();
+        if (liveServer) { try { liveServer.close(); } catch (_) {} }
+        if (TRACE && context) {
+            try {
+                fs.mkdirSync(DEBUG_DIR, { recursive: true });
+                await Promise.race([context.tracing.stop({ path: path.join(DEBUG_DIR, 'trace.zip') }).catch(() => {}), sleep(20000)]);
+                log('🧵 Trace saved: debug/trace.zip (open it at https://trace.playwright.dev on any device)');
+            } catch (_) {}
+        }
+        if (browser) await Promise.race([browser.close().catch(() => {}), sleep(4000)]);
+    } catch (e) { log('⚠️ Cleanup problem:', e.message); }
+    process.exit(code);
+}
+
+process.on('SIGINT',  () => shutdown('Ctrl+C', 0));
+process.on('SIGTERM', () => shutdown('SIGTERM', 0));
+process.on('SIGHUP',  () => shutdown('terminal closed', 0));
+process.on('uncaughtException', async (e) => { log('💥 Fatal:', e && e.stack || e); await snap('fatal').catch(() => {}); shutdown('uncaught exception', 1); });
+process.on('unhandledRejection', (r) => { log('⚠️ Unhandled rejection:', (r && r.message) || r); });
+
+// ============================================================================
+// DOWNLOAD WORKERS
+// ============================================================================
+function cleanupSidecars(id) {
+    for (const suffix of ['.jpg', '_song.jpg', '_metadata.json']) {
+        safeUnlink(path.join(DOWNLOAD_FOLDER, `reel_${id}${suffix}`));
+    }
+    safeUnlink(path.join(DOWNLOAD_FOLDER, `reel_${id}.mp4.part`));
+}
+
+async function downloadToFile(axios, url, dest) {
+    const res = await axios({
+        method: 'GET', url, responseType: 'stream', timeout: 20000,
+        headers: { 'User-Agent': USER_AGENT, 'Accept': '*/*' },
+    });
+    const expected = Number(res.headers['content-length']) || 0;
+
+    // axios' timeout only covers the response headers; this kills stalled bodies.
+    let idle;
+    const arm = () => { clearTimeout(idle); idle = setTimeout(() => res.data.destroy(new Error('download stalled')), DOWNLOAD_IDLE_TIMEOUT_MS); };
+    arm();
+    res.data.on('data', arm);
+    try { await pipeline(res.data, fs.createWriteStream(dest)); }
+    finally { clearTimeout(idle); }
+
+    const size = fs.statSync(dest).size;
+    if (size === 0) throw new Error('empty file');
+    if (expected && size !== expected) throw new Error(`truncated (${size}/${expected} bytes)`);
+    return size;
+}
+
+async function downloadSmall(axios, url, dest) {
+    const res = await axios({
+        method: 'GET', url, responseType: 'arraybuffer', timeout: 10000,
+        headers: { 'User-Agent': USER_AGENT, 'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8' },
+    });
+    fs.writeFileSync(dest, res.data);
+}
+
+// Order matters for your app: video goes to *.mp4.part first, then pfp / song /
+// metadata are written, and the .mp4 appears LAST via an atomic rename. So when
+// reel_<id>.mp4 exists, everything that belongs to it is already there.
+async function executeDownload(task) {
+    const axios = require('axios');
+    const id = String(task.id);
+    const filePath     = path.join(DOWNLOAD_FOLDER, `reel_${id}.mp4`);
+    const partPath     = filePath + '.part';
+    const pfpPath      = path.join(DOWNLOAD_FOLDER, `reel_${id}.jpg`);
+    const songPath     = path.join(DOWNLOAD_FOLDER, `reel_${id}_song.jpg`);
+    const metadataPath = path.join(DOWNLOAD_FOLDER, `reel_${id}_metadata.json`);
+
+    if (fs.existsSync(filePath)) { addToHistory(id); return 'EXISTS'; }
+
+    const t0 = Date.now();
+    let bytes = 0;
+    try {
+        dbg(`↓ ${id} start from ${new URL(task.url).host} (attempt ${task.attempts})`);
+        bytes = await downloadToFile(axios, task.url, partPath);
+    } catch (err) {
+        safeUnlink(partPath);
+        const status = err.response && err.response.status;
+        if (status === 403 || status === 404 || status === 410) { dbg(`↓ ${id} HTTP ${status}`); return 'EXPIRED'; }
+        log(`   ↳ ${id}: ${err.message}${err.code ? ' [' + err.code + ']' : ''} after ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+        return 'RETRY';
+    }
 
     if (task.pfpUrl) {
-        try {
-            const pfpResponse = await axios({
-                method: 'GET',
-                url: task.pfpUrl,
-                responseType: 'arraybuffer',
-                timeout: 10000,
-                headers: commonHeaders
-            });
-            fs.writeFileSync(pfpPath, pfpResponse.data);
-        } catch (e) {}
+        try { await downloadSmall(axios, task.pfpUrl, pfpPath); }
+        catch (e) { log(`   ⚠️ Profile pic skipped for ${id}: ${e.message}`); }
     }
-
     if (task.songImgUrl) {
-        try {
-            const songResponse = await axios({
-                method: 'GET',
-                url: task.songImgUrl,
-                responseType: 'arraybuffer',
-                timeout: 10000,
-                headers: commonHeaders
-            });
-            fs.writeFileSync(songPath, songResponse.data);
-        } catch (e) {}
+        try { await downloadSmall(axios, task.songImgUrl, songPath); }
+        catch (e) { log(`   ⚠️ Song art skipped for ${id}: ${e.message}`); }
+    }
+    if (task.rawMetadata) {
+        try { fs.writeFileSync(metadataPath, JSON.stringify(task.rawMetadata, null, 2), 'utf8'); } catch (_) {}
     }
 
-    try {
-        const response = await axios({
-            method: 'GET',
-            url: task.url,
-            responseType: 'stream',
-            timeout: 20000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
-                'Accept': '*/*'
-            }
-        });
+    try { renameWithRetry(partPath, filePath); }
+    catch (e) { safeUnlink(partPath); log(`   ↳ ${id}: rename failed (${e.message})`); return 'RETRY'; }
+    task.stat = { bytes, ms: Date.now() - t0 };
+    stats.bytes += bytes;
+    dbg(`↓ ${id} saved ${mb(bytes)} MB in ${((Date.now() - t0) / 1000).toFixed(1)}s (pfp: ${task.pfpUrl ? 'yes' : 'no'}, song art: ${task.songImgUrl ? 'yes' : 'no'})`);
+    return 'SAVED';
+}
 
-        const writer = fs.createWriteStream(filePath);
-        
-        return await new Promise((resolve) => {
-            response.data.pipe(writer);
+function startTask(task) {
+    const id = String(task.id);
+    task.attempts = (task.attempts || 0) + 1;
+    delete task.retryAt;
+    inFlight.set(id, task);
+    syncLock();
 
-            writer.on('finish', () => {
+    executeDownload(task)
+        .catch((err) => { log(`   ↳ ${id}: unexpected error ${err.message}`); return 'RETRY'; })
+        .then((status) => {
+            inFlight.delete(id);
+            if (status === 'SAVED') {
                 downloadCount++;
-                saveToHistory(task.id); 
-                resolve(true); 
-            });
-
-            const handleFailure = () => {
-                writer.end();
-                try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch(e){}
-                resolve(false); 
-            };
-
-            response.data.on('error', handleFailure);
-            writer.on('error', handleFailure);
+                swipesSinceSave = 0;
+                addToHistory(id);
+                const st = task.stat || {};
+                log(` ✅ [SAVED] ${downloadCount}/${TARGET_DOWNLOAD_COUNT} ${id} · @${task.username || '?'} · ${mb(st.bytes || 0)} MB in ${((st.ms || 0) / 1000).toFixed(1)}s  (queue: ${downloadQueue.length}, active: ${inFlight.size})`);
+            } else if (status === 'EXISTS') {
+                log(` ℹ️ [SKIP] ${id} already on disk.`);
+            } else if (status === 'EXPIRED') {
+                log(` ❌ [EXPIRED] ${id} link expired/denied. Dropped (a fresh link from the feed may re-queue it).`);
+                seenIds.delete(id);
+                stats.expired++;
+            } else if (task.attempts >= MAX_ATTEMPTS_PER_REEL) {
+                log(` ❌ [GAVE UP] ${id} failed ${task.attempts} times.`);
+                stats.failed++;
+                cleanupSidecars(id);
+            } else {
+                task.retryAt = Date.now() + 1500 * task.attempts;
+                downloadQueue.push(task);
+                log(` ♻️ [RETRY] ${id} (attempt ${task.attempts}/${MAX_ATTEMPTS_PER_REEL})`);
+            }
+            pump();
         });
-    } catch (error) {
-        if (error.response && (error.response.status === 403 || error.response.status === 410)) {
-            return 'EXPIRED';
-        }
-        return false;
+}
+
+function pump() {
+    if (stopping) return;
+    while (inFlight.size < MAX_CONCURRENT_DOWNLOADS && downloadCount + inFlight.size < TARGET_DOWNLOAD_COUNT) {
+        const now = Date.now();
+        const idx = downloadQueue.findIndex((t) => !t.retryAt || t.retryAt <= now);
+        if (idx === -1) break;
+        startTask(downloadQueue.splice(idx, 1)[0]);
+    }
+    syncLock();
+    // something is waiting for its retry time -> look again shortly
+    if (downloadQueue.length && !pumpTimer && downloadCount + inFlight.size < TARGET_DOWNLOAD_COUNT) {
+        pumpTimer = setTimeout(() => { pumpTimer = null; pump(); }, 500);
     }
 }
 
-async function processDownloadQueue() {
-    if (downloadCount >= TARGET_DOWNLOAD_COUNT || (downloadQueue.length === 0 && activeDownloads === 0)) {
-        if (downloadQueue.length === 0 && activeDownloads === 0) {
-            try { if (fs.existsSync(LOCK_FILE_PATH)) fs.unlinkSync(LOCK_FILE_PATH); } catch(e){}
+// ============================================================================
+// FEED INTERCEPTION
+// ============================================================================
+function findVideoItems(root) {
+    const found = [];
+    const stack = [{ node: root, depth: 0 }];
+    while (stack.length) {
+        const { node, depth } = stack.pop();
+        if (!node || typeof node !== 'object' || depth > 14) continue;
+
+        if (Array.isArray(node.video_versions) && node.video_versions.length > 0) {
+            const rawId = node.id != null ? node.id : node.pk;
+            if (rawId == null) continue;                       // no stable id -> can't dedupe, skip
+            const best = node.video_versions.reduce((m, v) =>
+                ((v.width || 0) * (v.height || 0) > (m.width || 0) * (m.height || 0) ? v : m), node.video_versions[0]);
+            if (!best || !best.url) continue;
+
+            const user = node.user || node.owner || {};
+            const music = (node.clips_metadata && node.clips_metadata.music_info && node.clips_metadata.music_info.music_asset_info)
+                || (node.music_info && node.music_info.music_asset_info) || {};
+            found.push({
+                id: String(rawId),
+                code: node.code || '',
+                url: best.url,
+                caption: (node.caption && node.caption.text) || '',
+                username: user.username || 'Instagram User',
+                pfpUrl: user.profile_pic_url || '',
+                songImgUrl: music.cover_artwork_uri || music.cover_artwork_thumbnail_uri || '',
+                rawMetadata: node,
+            });
+            continue;                                          // don't dig into the reel we just captured
         }
-        setTimeout(processDownloadQueue, 400);
+        for (const v of Object.values(node)) if (v && typeof v === 'object') stack.push({ node: v, depth: depth + 1 });
+    }
+    return found.reverse();
+}
+
+function registerFeedItems(json, source) {
+    const items = findVideoItems(json);
+    let fresh = 0;
+    for (const t of items) {
+        if (t.code) knownCodes.add(t.code);
+        if (!feedSeen.has(t.id)) { feedSeen.add(t.id); lastFeedActivity = Date.now(); }
+        if (historySet.has(t.id)) { stats.skippedHistory++; continue; }
+        if (seenIds.has(t.id)) { stats.skippedDuplicate++; continue; }
+        if (downloadCount + inFlight.size + downloadQueue.length >= TARGET_DOWNLOAD_COUNT) { stats.skippedTarget++; continue; }
+        seenIds.add(t.id);
+        downloadQueue.push(t);
+        stats.queued++; fresh++;
+        log(`[QUEUE] New reel ${t.id} · @${t.username}`);
+    }
+    dbg(`API ${source}: ${items.length} reel(s) in response, ${fresh} new`);
+    pump();
+    return items.length;
+}
+
+// ============================================================================
+// COOKIES (accepts Playwright format AND browser-extension exports)
+// ============================================================================
+function loadCookies() {
+    if (!fs.existsSync(COOKIES_FILE)) throw new Error('cookies.json is missing next to the script.');
+    const raw = JSON.parse(fs.readFileSync(COOKIES_FILE, 'utf8'));
+    const list = Array.isArray(raw) ? raw : raw.cookies;
+    if (!Array.isArray(list) || !list.length) throw new Error('cookies.json has no cookies in it.');
+
+    const sameSiteMap = { no_restriction: 'None', none: 'None', lax: 'Lax', strict: 'Strict', unspecified: 'Lax' };
+    return list.filter((c) => c && c.name && c.value !== undefined).map((c) => {
+        const out = {
+            name: c.name,
+            value: String(c.value),
+            domain: c.domain || '.instagram.com',
+            path: c.path || '/',
+            secure: c.secure !== false,
+            httpOnly: !!c.httpOnly,
+            sameSite: sameSiteMap[String(c.sameSite || '').toLowerCase()] || 'Lax',
+        };
+        const exp = c.expires != null ? c.expires : c.expirationDate;
+        if (typeof exp === 'number' && exp > 0) out.expires = Math.floor(exp);
+        return out;
+    });
+}
+
+// ============================================================================
+// PAGE HELPERS
+// ============================================================================
+async function dismissPopups(page) {
+    try {
+        const notNow = page.getByText(/^not now$/i).first();
+        if (await notNow.isVisible()) {
+            log('   ↳ Dismissing "Not now" popup');
+            await notNow.click({ timeout: 3000 }).catch(() => {});
+            await sleep(800);
+        }
+    } catch (_) {}
+}
+
+// Returns a reason string if Instagram is asking for login / challenge / slowing us down.
+async function detectBlock(page) {
+    try {
+        const url = page.url();
+        if (/\/accounts\/login|\/challenge|\/accounts\/suspended|\/accounts\/disabled|\/accounts\/onetap/.test(url)) {
+            return `redirected to ${new URL(url).pathname}`;
+        }
+        const text = ((await page.evaluate(() => (document.body && document.body.innerText) || '').catch(() => '')) || '').toLowerCase();
+        if (/try again later|action blocked|we restrict certain activity|confirm it'?s you/.test(text)) {
+            return 'Instagram showed a restriction / verification message';
+        }
+    } catch (_) {}
+    return null;
+}
+
+// Real touch swipe through Chrome DevTools (trusted input), with fallbacks.
+let cdp = null;
+let cdpBroken = false;
+async function swipeToNextReel(page) {
+    if (cdp && !cdpBroken) {
+        try {
+            await cdp.send('Input.synthesizeScrollGesture', {
+                x: Math.round(195 + rand(-20, 20)),
+                y: Math.round(640 + rand(-30, 30)),
+                yDistance: -Math.round(rand(380, 520)),   // negative = finger moves up = next reel
+                speed: Math.round(rand(900, 1600)),
+                gestureSourceType: 'touch',
+            });
+            return 'touch';
+        } catch (e) { cdpBroken = true; log(`   ⚠️ Touch gesture unavailable (${e.message}); using wheel scroll.`); }
+    }
+    try { await page.mouse.move(195, 500); await page.mouse.wheel(0, Math.round(rand(700, 900))); return 'wheel'; } catch (_) {}
+    try { await page.evaluate(() => window.scrollBy(0, window.innerHeight)); } catch (_) {}
+    return 'scrollBy';
+}
+
+// ============================================================================
+// LIKES (from the player app)
+// ============================================================================
+function idToShortcode(id) {
+    const s = String(id).trim();
+    if (!/^\d+(_\d+)?$/.test(s)) return s;                 // already a shortcode
+    let num = BigInt(s.split('_')[0]);
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let code = '';
+    while (num > 0n) { code = alphabet[Number(num % 64n)] + code; num /= 64n; }
+    return code;
+}
+
+// 'ALREADY' | 'LIKED' | 'UNAVAILABLE' | 'FAILED'   (English UI labels, like v1)
+async function likeCurrentReel(page) {
+    const unlike = page.locator('svg[aria-label="Unlike"]').first();
+    const like = page.locator('svg[aria-label="Like"]').first();
+
+    if (await unlike.isVisible().catch(() => false)) return 'ALREADY';
+    await like.waitFor({ state: 'visible', timeout: 4000 }).catch(() => {});
+    if (!(await like.isVisible().catch(() => false))) {
+        return (await unlike.isVisible().catch(() => false)) ? 'ALREADY' : 'UNAVAILABLE';
+    }
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+        await like.scrollIntoViewIfNeeded().catch(() => {});
+        const box = await like.boundingBox().catch(() => null);
+        if (!box) break;
+        await page.touchscreen.tap(box.x + box.width / 2 + rand(-3, 3), box.y + box.height / 2 + rand(-3, 3));
+        await sleep(1500);
+        if (await unlike.isVisible().catch(() => false)) return 'LIKED';    // verified: icon flipped
+    }
+    return 'FAILED';
+}
+
+async function processPendingLikes(page) {
+    if (!fs.existsSync(LIKES_FILE)) return;
+    const pending = readJsonSafe(LIKES_FILE, null);
+    if (!Array.isArray(pending) || pending.length === 0) return;
+
+    const todo = [...new Set(pending.map(String))].slice(0, MAX_LIKES_PER_RUN);
+    log(`❤️ ${pending.length} pending like(s) from the player app — doing ${todo.length} this run`);
+
+    const resolved = new Set();
+    for (const id of todo) {
+        if (stopping) break;
+        const code = idToShortcode(id);
+        if (!code) { resolved.add(id); continue; }
+        try {
+            await page.goto(`https://www.instagram.com/reel/${code}/`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await sleep(randInt(4000, 6000));
+            await dismissPopups(page);
+            dbg(`like page landed on ${page.url()}`);
+            const blocked = await detectBlock(page);
+            if (blocked) { log(`   ⛔ ${blocked} — stopping likes.`); await snap('blocked-likes'); break; }
+
+            const outcome = await likeCurrentReel(page);
+            log(`   -> ${id} (${code}): ${outcome}`);
+            if (outcome === 'FAILED' || outcome === 'UNAVAILABLE') await snap(`like-${outcome.toLowerCase()}`);
+            if (outcome !== 'FAILED') resolved.add(id);        // FAILED stays pending for next run
+            await sleep(randInt(3000, 6000));
+        } catch (err) {
+            log(`   ❌ ${id}: ${err.message}`);                 // stays pending
+        }
+    }
+
+    // Re-read before writing so likes the app added while we were busy are not lost.
+    try {
+        const latest = readJsonSafe(LIKES_FILE, []);
+        const remaining = Array.isArray(latest) ? latest.map(String).filter((x) => !resolved.has(x)) : [];
+        writeFileAtomic(LIKES_FILE, JSON.stringify(remaining));
+        log(`❤️ Likes done. ${remaining.length} still pending.`);
+    } catch (e) { log('⚠️ Could not update pending_likes.json:', e.message); }
+}
+
+// ============================================================================
+// CAPTURE: read every Instagram API response (any URL, any content-type), plus
+// a fallback that looks the current reel up by the code in the page URL when the
+// feed never delivered its data.
+// ============================================================================
+function parseIgJson(text) {
+    if (!text) return [];
+    let t = text.trim();
+    if (t.startsWith('for (;;);')) t = t.slice(9);
+    try { return [JSON.parse(t)]; } catch (_) {}
+    const out = [];                                        // some responses are several JSON objects, one per line
+    for (const line of t.split('\n')) {
+        const l = line.trim();
+        if (!l) continue;
+        try { out.push(JSON.parse(l)); } catch (_) {}
+    }
+    return out;
+}
+
+function extractEmbeddedJson(html) {
+    const out = [];
+    const re = /<script[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/g;
+    let m;
+    while ((m = re.exec(html))) {
+        if (!m[1].includes('video_versions')) continue;
+        try { out.push(JSON.parse(m[1])); } catch (_) {}
+    }
+    return out;
+}
+
+// Keeps up to 4 raw responses we could not use, so the format can be inspected.
+function saveSample(label, where, text) {
+    if (samplesSaved >= 4) return;
+    samplesSaved++;
+    try {
+        fs.mkdirSync(DEBUG_DIR, { recursive: true });
+        const name = `sample-${label}-${samplesSaved}.txt`;
+        fs.writeFileSync(path.join(DEBUG_DIR, name), `// ${where}\n${text.slice(0, 200000)}`);
+        log(`🧪 Saved raw API sample: debug/${name}`);
+    } catch (_) {}
+}
+
+async function handleIgResponse(response) {
+    let u;
+    try { u = new URL(response.url()); } catch (_) { return; }
+    if (!/(^|\.)instagram\.com$/.test(u.hostname)) return;
+    const type = response.request().resourceType();
+    if (type !== 'xhr' && type !== 'fetch' && type !== 'document') return;
+    if (response.status() !== 200) return;
+    if ((Number(response.headers()['content-length']) || 0) > 8 * 1024 * 1024) return;
+
+    const text = await response.text();
+    stats.apiResponses++;
+
+    if (!text.includes('video_versions')) {
+        if (text.includes('video_dash_manifest')) {
+            dbg(`${type} ${u.pathname}: DASH manifests but no video_versions`);
+            saveSample('dash-only', u.pathname, text);
+        } else if (/clips|graphql|media|reel/.test(u.pathname)) {
+            dbg(`${type} ${u.pathname}: ${text.length}B, no video data`);
+        }
         return;
     }
-
-    while (activeDownloads < MAX_CONCURRENT_DOWNLOADS && downloadQueue.length > 0 && downloadCount < TARGET_DOWNLOAD_COUNT) {
-        const nextTask = downloadQueue.shift();
-        if (!nextTask) break;
-
-        activeDownloads++;
-        try {
-            fs.writeFileSync(LOCK_FILE_PATH, 'ACTIVE', 'utf8');
-        } catch (lockError) {}
-
-        executeIndividualDownload(nextTask).then((status) => {
-            activeDownloads--;
-            if (status === true) {
-                console.log(` ? [SAVED] Progress: ${downloadCount}/${TARGET_DOWNLOAD_COUNT} files. (Queue size: ${downloadQueue.length})`);
-            } else if (status === 'EXPIRED') {
-                console.log(` ? [EXPIRED] Link for Reel ${nextTask.id} has expired. Dropping from backlog permanently.`);
-            } else {
-                console.log(` ?? [RE-QUEUE] Network drop for ${nextTask.id}. Retrying later.`);
-                setTimeout(() => {
-                    downloadQueue.push(nextTask);
-                }, 1500);
-            }
-        }).catch(() => {
-            activeDownloads--;
-            downloadQueue.push(nextTask); 
-        });
+    const objs = type === 'document' ? extractEmbeddedJson(text) : parseIgJson(text);
+    let found = 0;
+    for (const o of objs) found += registerFeedItems(o, u.pathname);
+    if (found === 0) {
+        dbg(`${type} ${u.pathname}: mentions video_versions but 0 usable reels parsed`);
+        saveSample('unparsed', u.pathname, text);
     }
-
-    setTimeout(processDownloadQueue, 300);
 }
 
-function findVideoUrls(obj, foundLinks = []) {
-    if (!obj || typeof obj !== 'object') return foundLinks;
-    
-    if (obj.video_versions && Array.isArray(obj.video_versions) && obj.video_versions.length > 0) {
-        const id = obj.id || obj.pk || Math.random().toString(36).substring(7);
-        const captionText = obj.caption?.text || obj.edge_media_to_caption?.edges?.[0]?.node?.text || '';
-        
-        const username = obj.user?.username || obj.owner?.username || 'Instagram User';
-        const pfpUrl = obj.user?.profile_pic_url || obj.owner?.profile_pic_url || '';
-        
-        const songImgUrl = obj.clips_metadata?.music_info?.music_asset_info?.cover_artwork_uri || 
-                           obj.clips_metadata?.music_info?.music_asset_info?.cover_artwork_thumbnail_uri || 
-                           obj.music_info?.music_asset_info?.cover_artwork_uri || '';
-
-        const highestResVideo = obj.video_versions.reduce((max, video) => {
-            const currentArea = (video.width || 0) * (video.height || 0);
-            const maxArea = (max.width || 0) * (max.height || 0);
-            return currentArea > maxArea ? video : max;
-        }, obj.video_versions[0]);
-
-        foundLinks.push({ 
-            url: highestResVideo.url, 
-            id: id, 
-            caption: captionText,
-            username: username,
-            pfpUrl: pfpUrl,
-            songImgUrl: songImgUrl,
-            rawMetadata: obj 
-        });
-    }
-    
-    for (const key in obj) {
-        if (Object.prototype.hasOwnProperty.call(obj, key)) {
-            findVideoUrls(obj[key], foundLinks);
-        }
-    }
-    return foundLinks;
-}
-
-// ============================================================================
-// NATIVE PLAYWRIGHT INTERCEPTOR
-// ============================================================================
-async function dismissLoginPopup(page) {
+function currentReelCode(page) {
     try {
-        const bodyText = await page.evaluate(() => document.body.innerText || "").catch(() => "");
-        const lowerText = bodyText.toLowerCase();
+        const m = new URL(page.url()).pathname.match(/^\/reels?\/([A-Za-z0-9_-]{6,})\/?$/);
+        return m ? m[1] : null;
+    } catch (_) { return null; }
+}
 
-        if (lowerText.includes("save your login info") || lowerText.includes("save info")) {
-            console.log('?? [INTERCEPT] "Save your login info?" overlay detected on viewport.');
+function shortcodeToId(code) {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    let n = 0n;
+    for (const ch of code) {
+        const i = alphabet.indexOf(ch);
+        if (i < 0) return null;
+        n = n * 64n + BigInt(i);
+    }
+    return n.toString();
+}
 
-            const targetBtn = page.locator('button, [role="button"], div, span').filter({ hasText: /^Not now$/i }).first();
-            if (await targetBtn.isVisible()) {
-                await targetBtn.click({ force: true, timeout: 3000 }).catch(() => {});
-                await page.waitForTimeout(1000);
-                return;
-            }
+// Called after every swipe. Marks the reel in the URL as visited and, if the
+// feed responses never gave us its data, asks Instagram for it the same way the
+// web app does. Returns a stop-reason string if Instagram pushes back, else null.
+async function ensureCurrentReelCaptured(page) {
+    const code = currentReelCode(page);
+    if (!code) return null;
+    if (!visitedCodes.has(code)) { visitedCodes.add(code); lastFeedActivity = Date.now(); }
+    if (knownCodes.has(code) || fallbackDisabled) return null;
+    const mediaId = shortcodeToId(code);
+    if (!mediaId) return null;
 
-            const looseBtn = page.locator('text=/not now/i').first();
-            if (await looseBtn.isVisible()) {
-                await looseBtn.click({ force: true, timeout: 3000 }).catch(() => {});
-                await page.waitForTimeout(1000);
-                return;
-            }
+    stats.fallbackCalls++;
+    let r;
+    try {
+        r = await page.evaluate(async (id) => {
+            const csrf = (document.cookie.match(/csrftoken=([^;]+)/) || [])[1] || '';
+            const res = await fetch(`/api/v1/media/${id}/info/`, {
+                credentials: 'include',
+                headers: { 'x-ig-app-id': '936619743392459', 'x-csrftoken': csrf, 'x-requested-with': 'XMLHttpRequest', 'x-asbd-id': '129477' },
+            });
+            return { status: res.status, text: (await res.text()).slice(0, 3000000) };
+        }, mediaId);
+    } catch (e) { dbg(`URL lookup could not run: ${e.message}`); return null; }
 
-            const targetCoordinates = await page.evaluate(() => {
-                const elements = Array.from(document.querySelectorAll('button, [role="button"], div, span'));
-                const matched = elements.find(el => el.innerText?.toLowerCase().trim() === 'not now');
-                if (matched) {
-                    const rect = matched.getBoundingClientRect();
-                    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-                }
-                return null;
-            }).catch(() => null);
+    dbg(`URL lookup ${code} → HTTP ${r.status}, ${r.text.length}B`);
+    if (r.status === 200 && r.text.includes('video_versions')) {
+        fallbackFails = 0;
+        knownCodes.add(code);
+        for (const o of parseIgJson(r.text)) registerFeedItems(o, '/api/v1/media/info (URL lookup)');
+        return null;
+    }
 
-            if (targetCoordinates && targetCoordinates.x > 0 && targetCoordinates.y > 0) {
-                await page.touchscreen.tap(targetCoordinates.x, targetCoordinates.y).catch(() => {});
-                await page.waitForTimeout(1000);
-            }
-        }
-    } catch (e) {}
+    fallbackFails++; stats.fallbackFail++;
+    log(`⚠️ Could not look up reel ${code} (HTTP ${r.status}).`);
+    saveSample('lookup-failed', `media ${mediaId} status ${r.status}`, r.text);
+    if (r.status === 429 || /challenge_required|checkpoint_required|login_required|feedback_required/.test(r.text.slice(0, 600))) {
+        return `Instagram answered the lookup with HTTP ${r.status} (${(r.text.match(/"message":"([^"]+)"/) || [])[1] || 'restriction'})`;
+    }
+    if (fallbackFails >= 4) { fallbackDisabled = true; log('⚠️ URL lookup disabled after 4 failures in a row.'); }
+    return null;
 }
 
 // ============================================================================
-// AUTOMATION ENGINE
+// MAIN
 // ============================================================================
-(async () => {
-    console.log('Initializing Windows Native Scraper Pipeline...');
+async function main() {
+    log(`Initializing Windows Reels grabber v2.2 · pid ${process.pid} · node ${process.version}`);
+    log(`Flags: debug=${DEBUG} headed=${HEADED} trace=${TRACE} live=${LIVE_PORT || 'off'}`);
+    log(`Log file: ${logFile}`);
+    dbg('Config', { TARGET_DOWNLOAD_COUNT, MAX_CONCURRENT_DOWNLOADS, MAX_ATTEMPTS_PER_REEL, MAX_LIKES_PER_RUN, MAX_SESSION_MINUTES, MAX_SWIPES_WITHOUT_SAVE, FEED_IDLE_RELOAD_MS, DOWNLOAD_FOLDER, CHROMIUM_PATH });
 
-    const browser = await chromium.launch({
-        headless: true,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--disable-blink-features=AutomationControlled',
-        ]
-    });
+    // --- single-instance guard -------------------------------------------------
+    if (fs.existsSync(PID_FILE)) {
+        const old = Number(fs.readFileSync(PID_FILE, 'utf8'));
+        let alive = false;
+        try { if (old && old !== process.pid) { process.kill(old, 0); alive = true; } } catch (_) {}
+        if (alive) { log(`❌ Another grabber is already running (pid ${old}). Close it first.`); process.exit(1); }
+    }
+    fs.writeFileSync(PID_FILE, String(process.pid));
 
-    const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36',
+    // --- housekeeping ----------------------------------------------------------
+    if (!fs.existsSync(DOWNLOAD_FOLDER)) fs.mkdirSync(DOWNLOAD_FOLDER, { recursive: true });
+    removeLock();                                              // leftover from a crashed run
+    for (const f of fs.readdirSync(DOWNLOAD_FOLDER)) if (f.endsWith('.mp4.part')) safeUnlink(path.join(DOWNLOAD_FOLDER, f));
+
+    if (fs.existsSync(QUEUE_BACKLOG_FILE)) {
+        const b = readJsonSafe(QUEUE_BACKLOG_FILE, null);
+        if (Array.isArray(b)) {
+            downloadQueue = b.filter((t) => t && t.id && t.url && !historySet.has(String(t.id)));
+            downloadQueue.forEach((t) => { t.id = String(t.id); delete t.retryAt; seenIds.add(t.id); });
+            log(`📥 Restored ${downloadQueue.length} unfinished item(s) from queue_backlog.json`);
+        } else {
+            log('⚠️ queue_backlog.json unreadable, ignoring it.');
+        }
+    }
+
+    // --- cookies ---------------------------------------------------------------
+    let cookies;
+    try { cookies = loadCookies(); }
+    catch (e) { log(`❌ ${e.message}`); return shutdown('no cookies', 1); }
+
+    // --- browser ---------------------------------------------------------------
+    const { chromium } = require('playwright');
+    const headless = !HEADED;
+    log(`Launching Chromium (${headless ? 'headless' : 'visible window'}${CHROMIUM_PATH ? ', ' + CHROMIUM_PATH : ''})...`);
+    const launchOptions = { headless, args: ['--disable-blink-features=AutomationControlled'] };
+    if (CHROMIUM_PATH) launchOptions.executablePath = CHROMIUM_PATH;
+    try {
+        browser = await chromium.launch(launchOptions);
+    } catch (e) {
+        log(`❌ Could not start Chromium: ${String(e.message).split('\n')[0]}`);
+        if (/Executable doesn't exist|browserType\.launch/i.test(e.message)) log('   Run this once in the script folder:  npx playwright install chromium');
+        return shutdown('browser did not start', 1);
+    }
+
+    // Use the real Chromium major version in the UA instead of a hard-coded old one.
+    const major = browser.version().split('.')[0];
+    USER_AGENT = `Mozilla/5.0 (Linux; Android 13; SM-S908B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Mobile Safari/537.36`;
+
+    log(`Chromium ${browser.version()} started.`);
+    context = await browser.newContext({
+        userAgent: USER_AGENT,
         viewport: { width: 390, height: 844 },
         isMobile: true,
-        hasTouch: true
+        hasTouch: true,
     });
 
-    if (fs.existsSync(COOKIES_FILE)) {
-        const cookies = JSON.parse(fs.readFileSync(COOKIES_FILE, 'utf8'));
-        await context.addCookies(cookies);
-        console.log('Successfully injected authenticated session cookies.');
-    } else {
-        console.error('CRITICAL ERROR: cookies.json is missing!');
+    try { await context.addCookies(cookies); log(`🍪 Injected ${cookies.length} session cookies.`); }
+    catch (e) { log(`❌ Playwright rejected the cookies: ${e.message}`); return shutdown('bad cookies', 1); }
+
+    if (TRACE) {
+        try { await context.tracing.start({ screenshots: true, snapshots: true }); log('🧵 Tracing is on (saved on exit).'); }
+        catch (e) { log(`⚠️ Tracing unavailable: ${e.message}`); }
     }
-    
     const page = await context.newPage();
-    
-    page.on('response', async (response) => {
-        const url = response.url();
-        const contentType = response.headers()['content-type'] || '';
-        
-        if ((url.includes('/api/v1/clips/home/') || url.includes('graphql/query')) && contentType.includes('json')) {
-            try {
-                const json = await response.json();
-                const targets = findVideoUrls(json);
-                for (const target of targets) {
-                    if (downloadCount >= TARGET_DOWNLOAD_COUNT) break;
-                    if (downloadedVideoIds.includes(target.id)) continue;
+    activePage = page;
+    startLiveView();
+    attachPageDiagnostics(page);
+    try { cdp = await context.newCDPSession(page); } catch (e) { cdpBroken = true; log('⚠️ CDP session unavailable:', e.message); }
 
-                    if (!downloadQueue.some(item => item.id === target.id)) {
-                        console.log(`[QUEUE] Intercepted NEW Reel ID: ${target.id}`);
-                        downloadQueue.push(target);
-                    }
-                }
-            } catch (e) {}
-        }
+    page.on('response', (response) => {
+        handleIgResponse(response).catch((e) => { stats.apiParseErrors++; dbg(`response not read: ${e.message}`); });
     });
 
+    // --- open feed -------------------------------------------------------------
     try {
-        console.log('Navigating directly to Reels target area...');
-        await page.goto('https://www.instagram.com/reels/', {
-            waitUntil: 'domcontentloaded',
-            timeout: 60000
-        });
-    } catch (gotoError) {
-        console.log('?? Navigation warning:', gotoError.message);
-    }
-    
-    const finalUrl = page.url();
-    console.log(`Verified Browser Location: ${finalUrl}`);
+        log('Opening Reels feed...');
+        await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    } catch (e) { log('⚠️ Navigation warning:', e.message); }
 
-    if (!finalUrl.includes('/reels/')) {
-        console.error('? CRITICAL: Session cookies likely expired or invalid.');
-        await browser.close();
-        process.exit(1);
+    const landed = new URL(page.url());
+    log(`Landed on: ${landed.pathname}`);
+    if (!/^\/reels?\//.test(landed.pathname)) {
+        log('❌ Not on the Reels feed — cookies are probably expired. Export fresh cookies.json.');
+        await snap('not-on-feed');
+        return shutdown('session invalid', 1);
     }
 
-    await processPlayerLikes(page);
-
-    await page.waitForTimeout(2000);
-    await dismissLoginPopup(page);
-
-    console.log('Connected to Algorithmic Feed Stream. Beginning automatic crawl loop...');
-
-    processDownloadQueue();
-
-    let lastDownloadCount = 0;
-    let stuckCounter = 0;
-    let lastSuccessTime = Date.now(); 
-
-    while (downloadCount < TARGET_DOWNLOAD_COUNT) {
-        if (Date.now() - lastSuccessTime > 25000) {
-            console.log('?? [STUCK DETECTED] No media progress in 25s. Running soft pipeline recovery...');
-            try {
-                await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 });
-                lastSuccessTime = Date.now(); 
-                await page.waitForTimeout(2000);
-            } catch (e) {
-                try { await page.evaluate(() => window.scrollTo(0, 0)); } catch(err){}
-                lastSuccessTime = Date.now(); 
-            }
-        }
-
-        await dismissLoginPopup(page);
-        
-        if (downloadQueue.length > 20) { 
-            console.log(`\n?? [QUEUE BACKLOG DETECTED] Backlog size: ${downloadQueue.length}. Freezing media play states...`);
-            
-            await page.evaluate(() => {
-                const currentVideo = document.querySelector('video');
-                if (currentVideo && typeof currentVideo.pause === 'function') {
-                    currentVideo.pause();
-                }
-            }).catch(() => {});
-
-            while (downloadQueue.length > 6) {
-                await page.waitForTimeout(1000);
-            }
-
-            console.log('?? [BACKLOG RESOLVED] Resuming stream playback...\n');
-            
-            await page.evaluate(() => {
-                const currentVideo = document.querySelector('video');
-                if (currentVideo && typeof currentVideo.play === 'function') {
-                    currentVideo.play();
-                }
-            }).catch(() => {});
-        }
-
-        try {
-            const startX = 195 + (Math.random() * 30 - 15);
-            const startY = 680 + (Math.random() * 40 - 20);
-            const endY = 130 + (Math.random() * 30 - 15);
-
-            await page.mouse.move(startX, startY);
-            await page.mouse.down();
-            await page.mouse.move(startX - (Math.random() * 12), 430, { steps: Math.floor(Math.random() * 3) + 4 });
-            await page.mouse.move(startX + (Math.random() * 8), endY, { steps: Math.floor(Math.random() * 3) + 4 });
-            await page.mouse.up();
-            
-            console.log(`[TOUCH SWIPE] Crawled feed step. Saved items: ${downloadCount}/${TARGET_DOWNLOAD_COUNT}`);
-        } catch (swipeError) {
-            try { await page.evaluate(() => window.scrollBy(0, window.innerHeight)); } catch(e){}
-        }
-        
-        await page.waitForTimeout(1500);
-        
-        await page.evaluate(() => {
-            document.querySelectorAll('video').forEach(video => {
-                if (video && typeof video.pause === 'function') {
-                    video.pause();
-                    video.removeAttribute('src'); 
-                    video.load(); 
-                }
-            });
-        }).catch(() => {});
-
-        if (downloadCount === lastDownloadCount) {
-            stuckCounter++;
-            
-            if (stuckCounter > 2) {
-                console.log('?? [STUCK SEGMENT] Container tracking lost. Re-focusing viewport elements...');
-                try {
-                    await page.touchscreen.tap(195, 400);
-                    await page.waitForTimeout(400);
-                    await page.evaluate(() => {
-                        const mainContainer = document.querySelector('main') || window;
-                        mainContainer.scrollBy(0, window.innerHeight);
-                    });
-                } catch (scrollErr) {}
-                stuckCounter = 0;
-            }
-        } else {
-            stuckCounter = 0;
-            lastDownloadCount = downloadCount;
-            lastSuccessTime = Date.now(); 
-        }
-        
-        const behavioralRoll = Math.random();
-        let viewDelay = Math.floor(Math.random() * 2500) + 2200; 
-        
-        if (behavioralRoll < 0.20) {
-            viewDelay = Math.floor(Math.random() * 800) + 1200;
-        } else if (behavioralRoll > 0.82 && behavioralRoll <= 0.92) {
-            try {
-                const jitterX = 195 + Math.floor(Math.random() * 40 - 20);
-                const jitterY = 422 + Math.floor(Math.random() * 40 - 20);
-                await page.touchscreen.tap(jitterX, jitterY);
-                await page.waitForTimeout(Math.floor(Math.random() * 1500) + 1000);
-                await page.evaluate(() => window.scrollBy(0, 120));
-                await page.waitForTimeout(Math.floor(Math.random() * 2000) + 2000);
-                await page.evaluate(() => window.scrollBy(0, -120));
-                await page.waitForTimeout(Math.floor(Math.random() * 1000) + 1000);
-                await page.touchscreen.tap(jitterX, jitterY);
-            } catch (err) {}
-            viewDelay = Math.floor(Math.random() * 2000) + 2000;
-        } else if (behavioralRoll > 0.92 && behavioralRoll <= 0.96) {
-            try {
-                const fumbleX = Math.random() < 0.5 ? (30 + Math.random() * 40) : (340 + Math.random() * 30);
-                const fumbleY = 300 + Math.floor(Math.random() * 200);
-                await page.mouse.move(fumbleX, fumbleY);
-                await page.mouse.down();
-                await page.mouse.move(fumbleX + (Math.random() * 40 - 20), fumbleY - (Math.random() * 60 + 20), { steps: 2 });
-                await page.mouse.up();
-                await page.waitForTimeout(Math.floor(Math.random() * 2500) + 2000);
-            } catch (err) {}
-            viewDelay = Math.floor(Math.random() * 2000) + 2000;
-        } else if (behavioralRoll > 0.96) {
-            try {
-                const profileHandleX = 65 + Math.floor(Math.random() * 30 - 15);
-                const profileHandleY = 745 + Math.floor(Math.random() * 20 - 10);
-                await page.touchscreen.tap(profileHandleX, profileHandleY);
-                await page.waitForTimeout(Math.floor(Math.random() * 3000) + 4000);
-                await page.goBack({ waitUntil: 'domcontentloaded' });
-            } catch (err) {}
-            viewDelay = Math.floor(Math.random() * 3000) + 3000;
-        }
-
-        await page.waitForTimeout(viewDelay);
+    await processPendingLikes(page);
+    if (!stopping) {
+        await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+        await sleep(2000);
+        await dismissPopups(page);
     }
 
-    while(downloadQueue.length > 0 || activeDownloads > 0) {
-        await new Promise(r => setTimeout(r, 1000));
+    log('Connected to feed. Starting crawl...');
+    lastFeedActivity = Date.now();
+    pump();
+
+    // --- crawl loop ------------------------------------------------------------
+    const sessionStart = Date.now();
+    let reloadsInRow = 0;
+    let lastFeedSize = feedSeen.size;
+    let exitCode = 0;
+
+    while (downloadCount < TARGET_DOWNLOAD_COUNT && !stopping) {
+        if (Date.now() - sessionStart > MAX_SESSION_MINUTES * 60000) { log('⏱️ Session time limit reached.'); break; }
+        if (swipesSinceSave >= MAX_SWIPES_WITHOUT_SAVE) { log('ℹ️ Feed keeps showing reels you already have. Stopping.'); break; }
+
+        if (stats.swipes % 8 === 0) {
+            const blocked = await detectBlock(page);
+            if (blocked) { log(`⛔ ${blocked}. Stopping to protect the account.`); await snap('blocked'); exitCode = 2; break; }
+        }
+        await dismissPopups(page);
+
+        // let downloads catch up instead of racing ahead
+        if (downloadQueue.length > BACKLOG_PAUSE_AT) {
+            log(`⏸️ Queue is ${downloadQueue.length} long — waiting for downloads to catch up...`);
+            const t0 = Date.now();
+            while (downloadQueue.length > BACKLOG_RESUME_AT && !stopping && Date.now() - t0 < 120000) await sleep(1000);
+        }
+
+        // feed went quiet -> reload it; give up after a few useless reloads
+        if (feedSeen.size !== lastFeedSize) { lastFeedSize = feedSeen.size; reloadsInRow = 0; }
+        if (Date.now() - lastFeedActivity > FEED_IDLE_RELOAD_MS) {
+            if (reloadsInRow >= MAX_FEED_RELOADS_IN_ROW) { log('❌ Feed stopped producing reels after several reloads. Stopping.'); exitCode = 3; break; }
+            reloadsInRow++; stats.reloads++;
+            await snap('feed-idle');
+            log(`⚠️ No new reels for ${Math.round((Date.now() - lastFeedActivity) / 1000)}s — reloading feed (${reloadsInRow}/${MAX_FEED_RELOADS_IN_ROW})`);
+            await page.goto('https://www.instagram.com/reels/', { waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {});
+            lastFeedActivity = Date.now();
+            await sleep(2500);
+            continue;
+        }
+
+        const method = await swipeToNextReel(page);
+        stats.swipes++; swipesSinceSave++;
+        log(`[SWIPE ${stats.swipes}] saved ${downloadCount}/${TARGET_DOWNLOAD_COUNT} · queue ${downloadQueue.length} · active ${inFlight.size}`);
+        dbg(`swipe via ${method}; reels seen ${feedSeen.size}; ${Math.round((Date.now() - lastFeedActivity) / 1000)}s since a new reel; ${swipesSinceSave} swipes since last save`);
+        if (stats.swipes % 10 === 0) {
+            log(`💓 ${stats.swipes} swipes · ${downloadCount} saved · ${visitedCodes.size} visited / ${knownCodes.size} captured · skipped (history ${stats.skippedHistory}, dup ${stats.skippedDuplicate}) · page: ${page.url().slice(0, 70)}`);
+            if (DEBUG) await snap('crawl');
+        }
+
+        // watch-time: mostly normal, sometimes quick skip, sometimes a longer look
+        const roll = Math.random();
+        const dwell = roll < 0.20 ? randInt(1200, 2000)
+                    : roll > 0.88 ? randInt(5000, 9000)
+                    : randInt(2200, 4700);
+        dbg(`dwell ${dwell}ms (roll ${roll.toFixed(2)})`);
+        const settle = Math.min(dwell, 1800);              // give the feed a moment to deliver this reel's data
+        await sleep(settle);
+        const stopReason = await ensureCurrentReelCaptured(page);
+        if (stopReason) { log(`⛔ ${stopReason}. Stopping to protect the account.`); await snap('lookup-blocked'); exitCode = 2; break; }
+        await sleep(Math.max(0, dwell - settle));
+
+        if (visitedCodes.size >= 15 && knownCodes.size < visitedCodes.size * 0.3) {
+            log(`❌ The browser showed ${visitedCodes.size} reels but data was captured for only ${knownCodes.size}. Capture is not working — send me the log and debug/sample-*.txt.`);
+            await snap('capture-failing');
+            exitCode = 4;
+            break;
+        }
     }
 
-    try { if (fs.existsSync(LOCK_FILE_PATH)) fs.unlinkSync(LOCK_FILE_PATH); } catch(e){}
+    // --- finish ----------------------------------------------------------------
+    const t0 = Date.now();
+    while ((downloadQueue.length > 0 || inFlight.size > 0) && !stopping && Date.now() - t0 < 180000) { pump(); await sleep(500); }
 
-    console.log(`\n?? Success! Processed session cap of ${downloadCount} fresh items into storage.`);
-    await browser.close();
-    process.exit(0);
-})();
+    if (exitCode === 0 && !stopping) await processPendingLikes(page);
+
+    log(`\n🎉 Done. Saved ${downloadCount} new reel(s) this run.`);
+    await shutdown('finished', exitCode);
+}
+
+if (require.main === module) {
+    main().catch((e) => { log('💥 Fatal:', e && e.stack || e); shutdown('fatal error', 1); });
+} else {
+    module.exports = { findVideoItems, idToShortcode, loadCookies, writeFileAtomic };   // for tests
+}
