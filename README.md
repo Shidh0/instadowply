@@ -88,6 +88,11 @@ npx playwright install chromium --with-deps
 * Added a Queue backlog file that get created when you Ctrl+C to interrupt the script
 * Added some fixes to save bandwidth and increase speed.
 * some fixes (im lazy..)
+* the script gets stuck again due to some changes by Instagram (probably)
+* rewritten the script and now it works back again
+* added --debug / --headed / --live flages
+* added detailed logging
+* log format changed
 
 # Upcoming Features
  * ~~Comments~~ X
